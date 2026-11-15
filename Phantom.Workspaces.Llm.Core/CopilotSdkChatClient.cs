@@ -1646,13 +1646,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ArgumentNullException.ThrowIfNull(messages);
 
         var messageOptions = BuildMessageOptions(messages);
-        var session = await this.EnsureSessionAsync(options, cancellationToken).ConfigureAwait(false);
-
         await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        var rootEvents = this.rootEventQueue!;
+        CopilotSdkRootEventQueue? rootEvents = null;
         var ownsDirectResponse = false;
         try
         {
+            var session = await this.EnsureSessionAsync(options, cancellationToken).ConfigureAwait(false);
+            rootEvents = this.rootEventQueue!;
             rootEvents.BeginDirectResponse();
             ownsDirectResponse = true;
             var toolEventLock = new object();
@@ -1724,7 +1724,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
         finally
         {
-            if (ownsDirectResponse) rootEvents.EndDirectResponse();
+            if (ownsDirectResponse) rootEvents!.EndDirectResponse();
             this.turnLock.Release();
         }
     }
@@ -1745,30 +1745,97 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var preparedSend = admittedBatch?.RequestSend;
         var promptSent = preparedSend is not null;
         Exception? preparedSendFailure = null;
-        if (preparedSend is not null)
+        List<Exception> ownedFailures = [];
+        ICopilotSession? failedSession = null;
+        CopilotSdkRootEventQueue? failedRoot = null;
+        var drainingFailure = false;
+        var establishmentToken = admittedBatch?.HasAcceptedOutput == true
+            || outputDrain is { StopRequested: true, HasOwner: true } ? CancellationToken.None : cancellationToken;
+        await this.turnLock.WaitAsync(establishmentToken).ConfigureAwait(false);
+        try
         {
-            try { await preparedSend.ConfigureAwait(false); }
-            catch (Exception failure)
+            if (preparedSend is not null)
             {
-                preparedSendFailure = failure;
-                admittedBatch!.Owner.SealAccepted();
-                outputDrain?.RequestStop();
+                try { await preparedSend.ConfigureAwait(false); }
+                catch (Exception failure)
+                {
+                    preparedSendFailure = failure;
+                    admittedBatch!.Owner.SealAccepted();
+                    RetainFailure(failure);
+                    outputDrain?.RequestStop();
+                }
             }
+            do
+            {
+                var acquired = false;
+                var updates = this.RunOwnedStreamingTurnAsync(async token =>
+                {
+                    var turn = await BeginTurnAsync(token).ConfigureAwait(false);
+                    acquired = true;
+                    return turn;
+                }, cancellationToken, outputDrain).GetAsyncEnumerator();
+                try
+                {
+                    while (true)
+                    {
+                        bool available;
+                        try { available = await updates.MoveNextAsync().ConfigureAwait(false); }
+                        catch (Exception failure)
+                        {
+                            RetainFailure(failure);
+                            break;
+                        }
+                        if (!available) break;
+                        yield return updates.Current;
+                    }
+                }
+                finally
+                {
+                    try { await updates.DisposeAsync().ConfigureAwait(false); }
+                    catch (Exception failure) { RetainFailure(failure); }
+                }
+                if (drainingFailure)
+                {
+                    // Fail seals receipt, making this drain finite. Only already-accepted readers
+                    // can enter another iteration; no prompt, steering, or native retry is eligible.
+                    if (!acquired || failedRoot?.HasPending != true) break;
+                    admittedBatch = new(failedRoot, failedRoot.Acquire(true), true);
+                }
+                else if (ownedFailures.Count > 0) break;
+            } while (drainingFailure || (!continuation && !promptSent && outputDrain?.StopRequested != true)
+                || (outputDrain?.StopRequested == true && this.rootEventQueue?.HasPending == true));
+            if (preparedSendFailure is not null) AddOwnedFailure(ownedFailures, preparedSendFailure);
         }
-        do
+        finally
         {
-            await foreach (var update in this.RunStreamingTurnAsync(BeginTurnAsync, cancellationToken, outputDrain).ConfigureAwait(false))
-                yield return update;
-        } while ((!continuation && !promptSent && outputDrain?.StopRequested != true)
-            || (outputDrain?.StopRequested == true && this.rootEventQueue?.HasPending == true));
-        if (preparedSendFailure is not null)
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(preparedSendFailure).Throw();
+            try
+            {
+                if (drainingFailure && failedRoot?.HasPending == false && failedSession is not null)
+                {
+                    try { await this.RetireFailedStreamingSessionAsync(failedSession).ConfigureAwait(false); }
+                    catch (Exception failure) { AddOwnedFailure(ownedFailures, failure); }
+                }
+            }
+            finally { this.turnLock.Release(); }
+            ThrowOwnedFailures(ownedFailures);
+        }
 
-        // Establishing the turn (resolving the session, creating the channel, and subscribing to
-        // session events) happens inside the turn lock because RunStreamingTurnAsync invokes this
-        // delegate while the lock is held. That ordering guarantees the previous turn has fully torn
-        // down first, so its events cannot bleed into this turn's channel and its session cannot be
-        // invalidated out from under us.
+        void RetainFailure(Exception failure)
+        {
+            AddOwnedFailure(ownedFailures, failure);
+            if (failure is OperationCanceledException && cancellationToken.IsCancellationRequested
+                && failedSession is null && this.rootEventQueue?.HasPending != true)
+                return;
+            failedSession ??= this.copilotSession;
+            failedRoot ??= this.rootEventQueue;
+            failedRoot?.Fail(failure);
+            drainingFailure = true;
+            outputDrain ??= new();
+            outputDrain.RequestStop();
+        }
+
+        // The operation holds the turn lock through every accepted drain batch and final
+        // retirement. Per-batch cleanup cannot invalidate the next old-session receipt.
         async Task<StreamingTurnContext> BeginTurnAsync(CancellationToken turnCancellationToken)
         {
             if (this.copilotSession is not null && this.rootEventQueue is { } existingRoot)
@@ -1790,7 +1857,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             if (admittedBatch?.HasAcceptedOutput != true)
                 cancellationToken.ThrowIfCancellationRequested();
             var session = admittedBatch?.HasAcceptedOutput == true
-                ? this.copilotSession ?? throw new InvalidOperationException("The accepted root batch has no owning native session.")
+                ? (drainingFailure ? failedSession : this.copilotSession)
+                    ?? throw new InvalidOperationException("The accepted root batch has no owning native session.")
                 : await this.EnsureSessionAsync(options, turnCancellationToken).ConfigureAwait(false);
             if (admittedBatch?.HasAcceptedOutput != true && this.rootEventQueue?.HasPending != true)
                 lock (this.subAgentStateGate)
@@ -1865,7 +1933,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // Fix for GitHub issue #765: serialize event dispatch via a channel to prevent concurrent
             // routing calls from corrupting internal dictionaries. SingleReader ensures the drain
             // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
-            var rootEvents = this.rootEventQueue
+            var rootEvents = (drainingFailure ? failedRoot : this.rootEventQueue)
                 ?? throw new InvalidOperationException("Copilot session has no root event receipt queue.");
             var acquiredContinuation = admittedBatch?.IsContinuation ?? false;
             var eventReader = admittedBatch?.Reader;
@@ -1904,6 +1972,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 catch (Exception exception)
                 {
                     this.FailRootObservation(rootEvents, exception);
+                    // Translation consumed the failing event, not the unread suffix. Return only
+                    // that suffix ahead of later batches, before exposing the routed failure.
+                    if (eventReader.TryPeek(out _)) rootEvents.ReturnUnconsumed(eventReader, true);
                     // Without this, a dispatch failure kills the event loop while the CLI keeps
                     // streaming: every subsequent session event is dropped and the turn's channel
                     // never completes, so the remaining output silently never renders (issue
@@ -1918,7 +1989,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // Reset the teardown gate for this turn: a previous turn's cancellation may have
             // left steeringSuspended=true (issue #1142). The new turn must start unsuspended so
             // its OnQueueChanged forwards Immediate items to the live session.
-            this.steeringSuspended = false;
+            if (!drainingFailure) this.steeringSuspended = false;
 
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
@@ -1934,6 +2005,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     () => session.SendAsync(immediate, cancellationToken)),
                 () => SteeringAdmissionOpen() && rootEvents.IsReceiving(eventReader));
             if (promptSent || continuation || acquiredContinuation) InstallSteering();
+            var requestStarted = false;
+            var requestReceiptVersion = rootEvents.ReceiptVersion;
 
             var subscription = new AsyncDelegateDisposable(async () =>
             {
@@ -1975,7 +2048,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     if (continuation || acquiredContinuation || promptSent) return;
                     cancellationToken.ThrowIfCancellationRequested();
                     if (!rootEvents.TryStartRequest(eventReader,
-                        () => session.SendAsync(messageOptions!, cancellationToken), out var sending,
+                        () =>
+                        {
+                            requestStarted = true;
+                            requestReceiptVersion = rootEvents.ReceiptVersion;
+                            return session.SendAsync(messageOptions!, cancellationToken);
+                        }, out var sending,
                         () => cancellationToken.ThrowIfCancellationRequested()))
                     {
                         acquiredContinuation = true;
@@ -1985,10 +2063,26 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     promptSent = true;
                     InstallSteering();
                 },
-                () => outputDrain?.StopRequested == true && rootEvents.HasPending
+                () => drainingFailure || outputDrain?.StopRequested == true && rootEvents.HasPending
                     ? Task.CompletedTask
                     : this.AbortAndInvalidateSessionAsync(session, router),
-                () => { this.InvalidateBrokenSession(session); return Task.CompletedTask; });
+                () =>
+                {
+                    if (rootEvents.IsSealed || rootEvents.HasPending)
+                    {
+                        failedSession = session;
+                        failedRoot = rootEvents;
+                    }
+                    else this.InvalidateBrokenSession(session);
+                    return Task.CompletedTask;
+                },
+                failure =>
+                {
+                    if (!requestStarted || rootEvents.ReceiptVersion == requestReceiptVersion) return false;
+                    this.FailRootObservation(rootEvents, failure);
+                    RetainFailure(failure);
+                    return true;
+                });
         }
     }
 
@@ -2011,36 +2105,86 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         await this.turnLock.WaitAsync(establishmentToken).ConfigureAwait(false);
         try
         {
-            // GetReadyTurnAsync handles IOException from SendAsync by retrying once with a fresh
-            // session. This is kept in a separate (non-iterator) method because async iterators
-            // do not permit yield inside a try block that has catch clauses.
-            var turn = await this.GetReadyTurnAsync(beginTurnAsync, establishmentToken).ConfigureAwait(false);
-            await using (turn.Subscription)
-            {
-                var readCancellationToken = outputDrain is null ? cancellationToken : CancellationToken.None;
-                await using var updates = turn.Reader
-                    .ReadAllAsync(readCancellationToken)
-                    .GetAsyncEnumerator(readCancellationToken);
-                try
-                {
-                    while (await MoveNextOrInvalidateAsync(updates, turn, cancellationToken).ConfigureAwait(false))
-                    {
-                        yield return updates.Current;
-                    }
-                }
-                finally
-                {
-                    if (cancellationToken.IsCancellationRequested || outputDrain?.StopRequested == true)
-                    {
-                        await turn.OnCancelledAsync().ConfigureAwait(false);
-                    }
-                }
-            }
+            await foreach (var update in this.RunOwnedStreamingTurnAsync(beginTurnAsync, cancellationToken, outputDrain).ConfigureAwait(false))
+                yield return update;
         }
         finally
         {
             this.turnLock.Release();
         }
+    }
+
+    private async IAsyncEnumerable<ChatResponseUpdate> RunOwnedStreamingTurnAsync(
+        Func<CancellationToken, Task<StreamingTurnContext>> beginTurnAsync,
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        CopilotSdkOutputDrain? outputDrain)
+    {
+        var establishmentToken = outputDrain is { StopRequested: true, HasOwner: true } ? CancellationToken.None : cancellationToken;
+        var turn = await this.GetReadyTurnAsync(beginTurnAsync, establishmentToken).ConfigureAwait(false);
+        var readCancellationToken = outputDrain is null ? cancellationToken : CancellationToken.None;
+        var updates = turn.Reader.ReadAllAsync(readCancellationToken).GetAsyncEnumerator(readCancellationToken);
+        List<Exception> failures = [];
+        try
+        {
+            while (true)
+            {
+                bool available;
+                try { available = await MoveNextOrInvalidateAsync(updates, turn, cancellationToken).ConfigureAwait(false); }
+                catch (Exception failure)
+                {
+                    AddOwnedFailure(failures, failure);
+                    break;
+                }
+                if (!available) break;
+                yield return updates.Current;
+            }
+        }
+        finally
+        {
+            if (cancellationToken.IsCancellationRequested || outputDrain?.StopRequested == true)
+            {
+                try { await turn.OnCancelledAsync().ConfigureAwait(false); }
+                catch (Exception failure) { AddOwnedFailure(failures, failure); }
+            }
+            try { await updates.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception failure) { AddOwnedFailure(failures, failure); }
+            try { await turn.Subscription.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception failure) { AddOwnedFailure(failures, failure); }
+            ThrowOwnedFailures(failures);
+        }
+    }
+
+    private static void AddOwnedFailure(List<Exception> failures, Exception failure)
+    {
+        if (failures.Any(existing => Contains(existing, failure))) return;
+        if (failures.Count > 0 && failure is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions) AddOwnedFailure(failures, inner);
+        }
+        else if (failure.InnerException is { } cause && failures.Any(existing => Contains(failure, existing)))
+            AddOwnedFailure(failures, cause);
+        else failures.Add(failure);
+
+        static bool Contains(Exception outer, Exception inner) => ReferenceEquals(outer, inner)
+            || (outer is AggregateException aggregate
+                ? aggregate.InnerExceptions.Any(value => Contains(value, inner))
+                : outer.InnerException is { } cause && Contains(cause, inner));
+    }
+
+    private static void ThrowOwnedFailures(List<Exception> failures)
+    {
+        if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1) throw new AggregateException("Copilot streaming and owned cleanup failed.", failures);
+    }
+
+    private async Task RetireFailedStreamingSessionAsync(ICopilotSession session)
+    {
+        if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session) return;
+        this.pendingResumeSessionId = null;
+        this.currentSessionSignature = null;
+        await CompleteOwnedCleanupAsync(
+            this.StopStateObserverAsync,
+            () => session.DisposeAsync().AsTask()).ConfigureAwait(false);
     }
 
     private static async Task<bool> MoveNextOrInvalidateAsync(
@@ -2052,12 +2196,16 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             return await updates.MoveNextAsync().ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception failure) when (!cancellationToken.IsCancellationRequested)
         {
             // A terminal transport/session failure makes this SDK session unusable. Drop it before
             // releasing the turn lock so a queued retry opens a fresh remote channel instead of
             // reusing the failed session (#1594).
-            await turn.OnPipeBrokenAsync().ConfigureAwait(false);
+            try { await turn.OnPipeBrokenAsync().ConfigureAwait(false); }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException("Streaming read and pipe cleanup failed.", failure, cleanupFailure);
+            }
             throw;
         }
     }
@@ -2076,8 +2224,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 await turn.SendAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (System.IO.IOException) when (!cancellationToken.IsCancellationRequested)
+            catch (System.IO.IOException sendFailure) when (!cancellationToken.IsCancellationRequested)
             {
+                if (turn.RetainAcceptedSendFailure?.Invoke(sendFailure) == true) return turn;
                 // Only a broken pipe retries; credential refusals keep their original required action.
                 await turn.Subscription.DisposeAsync().ConfigureAwait(false);
                 await turn.OnPipeBrokenAsync().ConfigureAwait(false);
@@ -2087,6 +2236,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
         catch (Exception sendFailure)
         {
+            if (turn.RetainAcceptedSendFailure?.Invoke(sendFailure) == true) return turn;
             try
             {
                 await turn.Subscription.DisposeAsync().ConfigureAwait(false);
@@ -2961,12 +3111,17 @@ internal sealed record SteeringDeliveryOutcome(ChatMessage Message, Exception? F
 /// before the retry. Invalidates the session without setting <c>pendingResumeSessionId</c> so the retry
 /// creates a fresh session instead of attempting to resume the broken one again.
 /// </param>
+/// <param name="RetainAcceptedSendFailure">
+/// Seals an unsuccessful native start when it already owns output. Returns true only when the
+/// reader must expose that output and its failure instead of disposing it or retrying the send.
+/// </param>
 internal sealed record StreamingTurnContext(
     System.Threading.Channels.ChannelReader<ChatResponseUpdate> Reader,
     IAsyncDisposable Subscription,
     Func<CancellationToken, Task> SendAsync,
     Func<Task> OnCancelledAsync,
-    Func<Task> OnPipeBrokenAsync);
+    Func<Task> OnPipeBrokenAsync,
+    Func<Exception, bool>? RetainAcceptedSendFailure = null);
 
 internal sealed class CredentialBoundCopilotClient(
     ICopilotClient inner,

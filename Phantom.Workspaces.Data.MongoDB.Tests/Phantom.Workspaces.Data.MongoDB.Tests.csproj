@@ -25,6 +25,7 @@
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\AgentPersistenceStoreContractTests.cs" Link="AgentPersistenceStoreContractTests.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\FilesystemEditStoreContractTests.cs" Link="FilesystemEditStoreContractTests.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\CopilotSdkRetirementPersistenceScenario.cs" Link="CopilotSdkRetirementPersistenceScenario.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\CopilotSdkActiveFailurePersistenceScenario.cs" Link="CopilotSdkActiveFailurePersistenceScenario.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotSession.cs" Link="Infrastructure\FakeCopilotSession.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotClient.cs" Link="Infrastructure\FakeCopilotClient.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotClientFactory.cs" Link="Infrastructure\FakeCopilotClientFactory.cs" />

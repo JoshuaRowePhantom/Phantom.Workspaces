@@ -8,7 +8,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
-internal static class CopilotSdkRetirementPersistenceScenario
+internal static partial class CopilotSdkRetirementPersistenceScenario
 {
     private const string Definition = """
         {"kind":"prompt","name":"retirement-root","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
@@ -389,9 +389,13 @@ internal static class CopilotSdkRetirementPersistenceScenario
         public AgentChat? Child { get; private set; }
         public RunningAgentChatLease? Lease { get; private set; }
         public int Releases { get; private set; }
+        public Func<Task>? BeforeCreateAsync { get; set; }
+        public Func<ValueTask>? ReleaseAsync { get; set; }
+        public List<RunningAgentChatLease> CreatedLeases { get; } = [];
         public async Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId,
             AgentServices? services, string? displayNameOverride, string? descriptionOverride, string? nameOverride, CancellationToken ct)
         {
+            if (this.BeforeCreateAsync is { } beforeCreate) await beforeCreate();
             this.Child = await AgentChat.CreateAsync(new()
             {
                 AgentSessionId = sessionId.Value,
@@ -405,7 +409,9 @@ internal static class CopilotSdkRetirementPersistenceScenario
                 this.Releases++;
                 this.Retiring.TrySetResult();
                 await this.Release.Task;
+                if (this.ReleaseAsync is { } release) await release();
             });
+            this.CreatedLeases.Add(this.Lease);
             this.Created.TrySetResult();
             return this.Lease;
         }

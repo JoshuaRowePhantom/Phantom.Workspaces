@@ -131,7 +131,13 @@ internal sealed class FakeCopilotSession : ICopilotSession
         return this.SetModelHandler?.Invoke(modelId, cancellationToken) ?? Task.CompletedTask;
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public int DisposeAsyncCallCount { get; private set; }
+    public Func<ValueTask>? OnDisposeAsync { get; set; }
+    public ValueTask DisposeAsync()
+    {
+        this.DisposeAsyncCallCount++;
+        return this.OnDisposeAsync?.Invoke() ?? ValueTask.CompletedTask;
+    }
 
     public void EnqueueEvent(SessionEvent sessionEvent)
     {

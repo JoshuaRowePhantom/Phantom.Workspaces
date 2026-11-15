@@ -103,6 +103,21 @@ public sealed class MongoDbAgentPersistenceStoreContractSlowTests : AgentPersist
     }
 
     [Theory]
+    [InlineData("observer")]
+    [InlineData("retirement")]
+    [InlineData("dispatch")]
+    [InlineData("poller")]
+    [InlineData("secondary-dispatch")]
+    public async Task AgentChat_ActiveRootFailure_RealMongoDrainsBeforeRetirement(string entry)
+    {
+        await this.ResetStoreAsync();
+        var productId = await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunActiveFailureDrainAsync(
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"), entry);
+        var messages = await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId });
+        await this.AssertUniqueSequencesAsync(productId, messages.Length);
+    }
+
+    [Theory]
     [InlineData(false, 0)]
     [InlineData(true, 0)]
     [InlineData(false, 1)]

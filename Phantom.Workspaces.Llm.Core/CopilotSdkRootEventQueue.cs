@@ -98,6 +98,7 @@ internal sealed class CopilotSdkRootEventQueue
     private bool directResponse;
     private bool sealedForDrain;
     private Exception? failure;
+    private long receiptVersion;
 
     internal event Action? ContinuationAvailable;
 
@@ -108,6 +109,10 @@ internal sealed class CopilotSdkRootEventQueue
     internal bool IsSealed
     {
         get { lock (this.gate) return this.sealedForDrain; }
+    }
+    internal long ReceiptVersion
+    {
+        get { lock (this.gate) return this.receiptVersion; }
     }
 
     internal void Accept(SessionEvent value)
@@ -129,7 +134,7 @@ internal sealed class CopilotSdkRootEventQueue
                 this.pending.Enqueue(this.receiving.Reader);
                 notify = true;
             }
-            this.receiving.Writer.TryWrite(value);
+            if (this.receiving.Writer.TryWrite(value)) this.receiptVersion++;
             if (string.IsNullOrEmpty(value.AgentId) && value is SessionIdleEvent or SessionErrorEvent)
             {
                 this.receiving.Writer.TryComplete();
