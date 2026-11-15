@@ -26,6 +26,7 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
         new WindowsDockerDesktopEngine(NullLogger<DockerCommandRunner>.Instance);
     private readonly MongoDbConnectionBroker _connectionBroker;
     private IMongoClient? isolatedClient;
+    private bool isolatedMode;
 
     public MongoDbTestDatabaseFixture()
     {
@@ -49,9 +50,9 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
         var isolatedConnection = Environment.GetEnvironmentVariable("PHANTOM_TEST_MONGODB_CONNECTION_STRING");
         if (!string.IsNullOrWhiteSpace(isolatedConnection))
         {
-            this.isolatedClient = new MongoClient(isolatedConnection);
-            Database = this.isolatedClient.GetDatabase("pw_mongodb_test_" + Guid.NewGuid().ToString("N"));
-            await Database.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1));
+            await this.InitializeOwnedClientAsync(new MongoClient(isolatedConnection),
+                "pw_mongodb_test_" + Guid.NewGuid().ToString("N"),
+                async database => { await database.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)); });
             return;
         }
         // The broker creates both bind-mount sources before starting the container.
@@ -63,14 +64,40 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        if (this.isolatedClient is not null)
+        if (this.isolatedMode)
         {
-            await this.isolatedClient.DropDatabaseAsync(Database.DatabaseNamespace.DatabaseName);
+            if (this.isolatedClient is null) return;
+            var client = this.isolatedClient;
+            this.isolatedClient = null;
+            await DropOwnedDatabaseAsync(client, Database.DatabaseNamespace.DatabaseName);
             return;
         }
         // Leave the container running so subsequent runs reuse the warmed-up Atlas Local instance.
         // Only clean up collection state.
         await ResetCollectionAsync();
+    }
+
+    internal async Task InitializeOwnedClientAsync(IMongoClient client, string databaseName, Func<IMongoDatabase, Task> initialize)
+    {
+        this.isolatedMode = true;
+        this.isolatedClient = client;
+        Database = client.GetDatabase(databaseName);
+        try { await initialize(Database); }
+        catch (Exception initializationFailure)
+        {
+            try { await this.DisposeAsync(); }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException("Private Mongo initialization and cleanup failed.", initializationFailure, cleanupFailure);
+            }
+            throw;
+        }
+    }
+
+    internal static async Task DropOwnedDatabaseAsync(IMongoClient client, string databaseName)
+    {
+        try { await client.DropDatabaseAsync(databaseName); }
+        finally { ((IDisposable)client).Dispose(); }
     }
 
     public async Task ResetCollectionAsync()

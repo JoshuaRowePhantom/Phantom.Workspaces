@@ -5,6 +5,44 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class CopilotSdkRootEventQueueTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PersistenceDrain_StopBeforeOrAfterAttach_SealsEveryNewBatchOwner(bool before)
+    {
+        var drain = new CopilotSdkOutputDrain();
+        var sealedBatches = 0;
+        if (before) drain.RequestStop();
+        drain.Attach(() => sealedBatches++);
+        if (!before) drain.RequestStop();
+        Assert.True(drain.StopRequested);
+        Assert.Equal(1, sealedBatches);
+        drain.Attach(() => sealedBatches++);
+        Assert.Equal(2, sealedBatches);
+    }
+
+    [Fact]
+    public async Task SealingForPersistence_RetainsActiveAndPendingSuffixAndRejectsLateNativeEvents()
+    {
+        var queue = new CopilotSdkRootEventQueue();
+        var active = queue.Acquire(false);
+        var first = new AssistantMessageEvent { Data = new() { MessageId = "first", Content = "accepted" } };
+        var pending = new AssistantMessageEvent { Data = new() { MessageId = "pending", Content = "also accepted" } };
+        queue.Accept(first);
+        queue.Accept(new SessionIdleEvent { Data = new() });
+        queue.Accept(pending);
+        queue.SealAccepted();
+        queue.Accept(new AssistantMessageEvent { Data = new() { MessageId = "late", Content = "after cutoff" } });
+        Assert.Same(first, await active.ReadAsync());
+        Assert.IsType<SessionIdleEvent>(await active.ReadAsync());
+        Assert.False(await active.WaitToReadAsync());
+        var next = queue.Acquire(true);
+        Assert.Same(pending, await next.ReadAsync());
+        Assert.False(await next.WaitToReadAsync());
+        Assert.False(queue.HasPending);
+        queue.Stop();
+    }
+
+    [Theory]
     [InlineData("turn")]
     [InlineData("reasoning")]
     [InlineData("delta")]

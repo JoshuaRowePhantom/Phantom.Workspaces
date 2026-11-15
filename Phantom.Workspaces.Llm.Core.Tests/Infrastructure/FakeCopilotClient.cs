@@ -29,6 +29,7 @@ internal sealed class FakeCopilotClient : ICopilotClient
     public Exception? StartException { get; set; }
 
     public int DisposeAsyncCallCount { get; private set; }
+    public Exception? DisposeFailure { get; set; }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -77,6 +78,6 @@ internal sealed class FakeCopilotClient : ICopilotClient
     {
         this.DisposeAsyncCallCount++;
         this.started = false;
-        return ValueTask.CompletedTask;
+        return this.DisposeFailure is { } failure ? ValueTask.FromException(failure) : ValueTask.CompletedTask;
     }
 }

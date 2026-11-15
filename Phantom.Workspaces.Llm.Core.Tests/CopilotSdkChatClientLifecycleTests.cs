@@ -229,11 +229,73 @@ public sealed partial class CopilotSdkChatClientTests
         await using var child = Assert.Single(table.AddedChats);
     }
 
-    [Fact]
-    public async Task CopilotSdkChatClient_ChildRetirementFailure_FaultsRootInsteadOfBecomingUnobserved()
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    public async Task CopilotSdkChatClient_LateChildRetirementFailure_RemainsOwnedAfterRootIdle(bool reconnect, bool independentFailure, bool synchronousDispose)
     {
         var session = new Infrastructure.FakeCopilotSession();
-        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        var sdk = new Infrastructure.FakeCopilotClient(session);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(sdk));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new IOException("late independent retirement");
+        var factory = new DeferredLifecycleFactory
+        {
+            ReleaseAsync = async () => { entered.TrySetResult(); await release.Task; throw failure; },
+        };
+        factory.Continue.TrySetResult();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        client.SetSubAgentDependencies(factory, table);
+        await InvokeEnsureSessionAsync(client);
+        await using (var parent = new LifecycleParentTurn(client, session, true))
+        {
+            await EmitObservedAsync(client, session, LifecycleStart());
+            await RouterBarrierAsync(client, session, parent.Pending!, 0);
+            parent.Next();
+            await EmitObservedAsync(client, session, LifecycleFinish());
+            await entered.Task;
+        }
+        release.TrySetResult();
+        if (reconnect)
+        {
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var registeredSession = typeof(CopilotSdkChatClient).GetField("copilotSession", flags)!.GetValue(client)!;
+            typeof(CopilotSdkChatClient).GetMethod("InvalidateCopilotSession", flags)!.Invoke(client, [registeredSession]);
+            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => InvokeEnsureSessionAsync(client)));
+        }
+        var cleanupFailure = new InvalidOperationException("independent client cleanup failure");
+        if (independentFailure) sdk.DisposeFailure = cleanupFailure;
+        if (synchronousDispose) client.Dispose();
+        if (independentFailure)
+        {
+            var aggregate = await Assert.ThrowsAsync<AggregateException>(async () => await client.DisposeAsync());
+            Assert.Equal(2, aggregate.InnerExceptions.Count);
+            Assert.Same(failure, aggregate.InnerExceptions[0]);
+            Assert.Same(cleanupFailure, aggregate.InnerExceptions[1]);
+        }
+        else
+            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(async () => await client.DisposeAsync()));
+        var ownedDisposal = (Task)typeof(CopilotSdkChatClient).GetField("disposalTask", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+        Assert.True(ownedDisposal.IsFaulted);
+        Assert.NotNull(ownedDisposal.Exception);
+        Assert.Equal(1, sdk.DisposeAsyncCallCount);
+        Assert.Equal(0, session.SubscriberCount);
+        await using var child = Assert.Single(table.AddedChats);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CopilotSdkChatClient_ChildRetirementFailure_FaultsRootInsteadOfBecomingUnobserved(bool retainedLeaseFails)
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
         client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(new Infrastructure.FakeCopilotClient(session)));
         var failure = new IOException("synthetic retirement failure");
         var factory = new DeferredLifecycleFactory { ReleaseAsync = () => ValueTask.FromException(failure) };
@@ -244,19 +306,37 @@ public sealed partial class CopilotSdkChatClientTests
         await using var parent = new LifecycleParentTurn(client, session, true);
         await EmitObservedAsync(client, session, LifecycleStart());
         await RouterBarrierAsync(client, session, parent.Pending!, 0);
+        var retainedFailure = new InvalidOperationException("independent retained lease failure");
+        if (retainedLeaseFails)
+        {
+            var childChat = Assert.Single(table.AddedChats);
+            var leases = (Dictionary<string, RunningAgentChatLease>)typeof(CopilotSdkChatClient)
+                .GetField("liveChildLeases", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+            var id = new AgentSessionId(childChat.AgentSessionId);
+            leases.Add(id.Value, new(id, childChat, () => ValueTask.FromException(retainedFailure)));
+        }
         parent.Next();
         await EmitObservedAsync(client, session, LifecycleFinish());
+        Exception? observedFailure = null;
         try
         {
-            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(async () =>
+            observedFailure = await Record.ExceptionAsync(async () =>
             {
                 while (await parent.Pending!) parent.Next();
-            }));
+            });
+            if (retainedLeaseFails)
+            {
+                var aggregate = Assert.IsType<AggregateException>(observedFailure);
+                Assert.Same(failure, aggregate.InnerExceptions[0]);
+                Assert.Same(retainedFailure, aggregate.InnerExceptions[1]);
+            }
+            else Assert.Same(failure, observedFailure);
         }
         finally
         {
             parent.Pending = null;
         }
+        Assert.Same(observedFailure, await Record.ExceptionAsync(async () => await client.DisposeAsync()));
         await using var child = Assert.Single(table.AddedChats);
     }
 

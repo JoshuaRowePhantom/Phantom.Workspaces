@@ -2,6 +2,9 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Collections.Specialized;
+using System.Threading.Channels;
+using System.Runtime.CompilerServices;
 using AgentSchema;
 using Avalonia;
 using Avalonia.Controls;
@@ -117,10 +120,17 @@ public sealed class ChatOutputControlLifecycleWebViewTests
     public Task AgentChatOutputControl_CompletedTaskFinalAndNextPrompt_AreDistinctVisibleSiblings()
         => this.fixture.InvokeAsync(async () =>
         {
-            await using var chat = await AgentFactory.CreateAgentChatAsync(
-                new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+            var client = new LifecycleStreamingClient();
+            await using var chat = await AgentChat.CreateAsync(new()
+            {
+                AgentDefinition = CreateAgentDefinition(),
+                ConfiguredStore = new InMemoryAgentPersistenceStore(),
+                ClientOverride = client,
+                ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+            });
             using var loggerFactory = new ObservableLoggerFactory();
             await using var viewModel = new AgentViewModel(chat, "durable-root", "", loggerFactory, TaskScheduler.Default);
+            using var status = new AgentChatStatusLineViewModel(viewModel);
             var control = new AgentChatOutputControl { DataContext = viewModel };
             var browser = GetBrowser(control);
             var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -131,23 +141,48 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 window.Show();
                 await ready.Task;
                 await control.HistoryLoaded;
-                chat.History.Add(new AgentChatHistoryItem
-                {
-                    Role = ChatRole.Assistant,
-                    Contents = [new FunctionCallContent("durable-task", "task", new Dictionary<string, object?> { ["prompt"] = "synthetic task" })],
-                });
-                chat.History.Add(new AgentChatHistoryItem
-                {
-                    Role = ChatRole.Tool,
-                    Contents = [new FunctionResultContent("durable-task", "synthetic completed result")],
-                });
-                chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("durable parent final")] });
-                chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("next durable prompt")] });
+                Assert.Empty(chat.RunningItems);
+                Assert.False(status.IsThinking);
+                var running = WhenChatStateAsync(chat, () => chat.RunningItems.Count > 0);
+                chat.EnqueueUserMessage("first durable prompt");
+                await running;
+                Assert.True(status.IsThinking);
+                client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("durable-task", "task", new Dictionary<string, object?> { ["prompt"] = "synthetic task" })] });
+                client.First.Writer.TryWrite(new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("durable-task", "synthetic completed result")] });
+                var streamed = WhenChatStateAsync(chat, () => chat.RunningItems.Any(run => run.Items.Any(
+                    item => item.Contents.OfType<TextContent>().Any(text => text.Text == "durable parent "))));
+                client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, MessageId = "answer", Contents = [new TextContent("durable parent ")] });
+                await streamed;
+                browser.EndBatch();
+                var streamingDom = await EvalAsync(browser, """
+                    (() => {
+                      const run = document.querySelector('.chat-running-item');
+                      return {running:!!run?.getClientRects().length,text:!!run?.textContent.includes('durable parent')};
+                    })()
+                    """);
+                Assert.Contains("\"running\":true", streamingDom, StringComparison.Ordinal);
+                Assert.Contains("\"text\":true", streamingDom, StringComparison.Ordinal);
+                var settled = WhenChatStateAsync(chat, () => chat.RunningItems.Count == 0
+                    && chat.History.Any(item => item.Contents.OfType<TextContent>().Any(text => text.Text == "durable parent final")));
+                client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, MessageId = "answer", Contents = [new TextContent("final")], FinishReason = ChatFinishReason.Stop });
+                client.First.Writer.Complete();
+                await settled;
+                Assert.False(status.IsThinking);
+                browser.EndBatch();
+                Assert.Equal("0", await EvalAsync(browser, "document.querySelectorAll('.chat-running-item').length"));
+                var nextRunning = WhenChatStateAsync(chat, () => chat.RunningItems.Count > 0
+                    && chat.History.Any(item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "next durable prompt")));
+                chat.EnqueueUserMessage("next durable prompt");
+                await nextRunning;
+                Assert.True(status.IsThinking);
                 browser.EndBatch();
                 var result = await EvalAsync(browser, """
                     (() => {
-                      const final = document.getElementById('history-2');
-                      const prompt = document.getElementById('history-3');
+                      document.querySelectorAll('details').forEach(node => node.open = false);
+                      const messages = [...document.querySelectorAll('[id^="history-"]')].filter(node => /^history-\d+$/.test(node.id));
+                      const final = messages.find(node => node.textContent.includes('durable parent final'));
+                      const prompt = messages.find(node => node.textContent.includes('next durable prompt'));
+                      const task = [...document.querySelectorAll('details')].find(node => node.textContent.includes('synthetic completed result'));
                       const visible = node => {
                         if (!node || !node.getClientRects().length) return false;
                         for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
@@ -164,7 +199,12 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                         visible: visible(final) && visible(prompt),
                         ordered: !!(final?.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING),
                         unique: new Set(ids).size === ids.length,
-                        result: document.body.textContent.includes('synthetic completed result')
+                        result: document.body.textContent.includes('synthetic completed result'),
+                        finalCount: messages.filter(node => node.textContent.includes('durable parent final')).length,
+                        promptCount: messages.filter(node => node.textContent.includes('next durable prompt')).length,
+                        taskCollapsed: !!task && !task.open && !task.contains(final),
+                        taskBeforeFinal: !!(task?.compareDocumentPosition(final) & Node.DOCUMENT_POSITION_FOLLOWING),
+                        collapsed: document.querySelectorAll('details').length > 0 && [...document.querySelectorAll('details')].every(node => !node.open)
                       };
                     })()
                     """);
@@ -174,13 +214,63 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 Assert.Contains("\"ordered\":true", result, StringComparison.Ordinal);
                 Assert.Contains("\"unique\":true", result, StringComparison.Ordinal);
                 Assert.Contains("\"result\":true", result, StringComparison.Ordinal);
+                Assert.Contains("\"finalCount\":1", result, StringComparison.Ordinal);
+                Assert.Contains("\"promptCount\":1", result, StringComparison.Ordinal);
+                Assert.Contains("\"taskCollapsed\":true", result, StringComparison.Ordinal);
+                Assert.Contains("\"taskBeforeFinal\":true", result, StringComparison.Ordinal);
+                Assert.Contains("\"collapsed\":true", result, StringComparison.Ordinal);
+                var nextSettled = WhenChatStateAsync(chat, () => chat.RunningItems.Count == 0);
+                client.Second.Writer.TryWrite(new() { Role = ChatRole.Assistant, Contents = [new TextContent("next answer")], FinishReason = ChatFinishReason.Stop });
+                client.Second.Writer.Complete();
+                await nextSettled;
                 Assert.Empty(chat.RunningItems);
+                Assert.False(status.IsThinking);
+                browser.EndBatch();
+                Assert.Equal("0", await EvalAsync(browser, "document.querySelectorAll('.chat-running-item').length"));
+                Assert.Equal("true", await EvalAsync(browser, "document.body.textContent.includes('next answer')"));
             }
             finally
             {
                 window.Close();
             }
         });
+
+    private static Task WhenChatStateAsync(AgentChat chat, Func<bool> predicate)
+    {
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new HashSet<AgentChatRunningItem>();
+        void Changed(object? sender, NotifyCollectionChangedEventArgs args)
+        {
+            foreach (var run in chat.RunningItems)
+                if (observed.Add(run)) run.Items.CollectionChanged += Changed;
+            if (!predicate()) return;
+            ((INotifyCollectionChanged)chat.History).CollectionChanged -= Changed;
+            ((INotifyCollectionChanged)chat.RunningItems).CollectionChanged -= Changed;
+            foreach (var run in observed) run.Items.CollectionChanged -= Changed;
+            settled.TrySetResult();
+        }
+        ((INotifyCollectionChanged)chat.History).CollectionChanged += Changed;
+        ((INotifyCollectionChanged)chat.RunningItems).CollectionChanged += Changed;
+        Changed(null, new(NotifyCollectionChangedAction.Reset));
+        return settled.Task;
+    }
+
+    private sealed class LifecycleStreamingClient : IChatClient
+    {
+        private int invocation;
+        public Channel<ChatResponseUpdate> First { get; } = Channel.CreateUnbounded<ChatResponseUpdate>();
+        public Channel<ChatResponseUpdate> Second { get; } = Channel.CreateUnbounded<ChatResponseUpdate>();
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var channel = Interlocked.Increment(ref this.invocation) == 1 ? this.First : this.Second;
+            await foreach (var update in channel.Reader.ReadAllAsync(cancellationToken)) yield return update;
+        }
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public object? GetService(Type type, object? key = null) => null;
+        public void Dispose() { }
+    }
 
     [Fact]
     public Task AgentChatOutputControl_RelativeAndFragmentLinks_PreserveBoundOriginAndRawReference()

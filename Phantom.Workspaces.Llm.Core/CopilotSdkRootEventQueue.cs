@@ -3,6 +3,38 @@ using System.Threading.Channels;
 
 namespace Phantom.Workspaces.Llm;
 
+/// <summary>Transfers an accepted batch to persistence cleanup before the native turn is retired.</summary>
+internal sealed class CopilotSdkOutputDrain
+{
+    internal const string OptionName = "copilot.sdk.accepted-output-drain";
+    private readonly object gate = new();
+    private Action? seal;
+    private bool stopRequested;
+    internal bool StopRequested { get { lock (this.gate) return this.stopRequested; } }
+
+    internal void Attach(Action sealBatch)
+    {
+        bool stop;
+        lock (this.gate)
+        {
+            this.seal = sealBatch;
+            stop = this.stopRequested;
+        }
+        if (stop) sealBatch();
+    }
+
+    internal void RequestStop()
+    {
+        Action? sealBatch;
+        lock (this.gate)
+        {
+            this.stopRequested = true;
+            sealBatch = this.seal;
+        }
+        sealBatch?.Invoke();
+    }
+}
+
 /// <summary>Session-owned receipt queue, including autonomous root turns between requests.</summary>
 internal sealed class CopilotSdkRootEventQueue
 {
@@ -11,6 +43,7 @@ internal sealed class CopilotSdkRootEventQueue
     private Channel<SessionEvent>? receiving;
     private bool stopped;
     private bool directResponse;
+    private bool sealedForDrain;
 
     internal event Action? ContinuationAvailable;
 
@@ -24,7 +57,7 @@ internal sealed class CopilotSdkRootEventQueue
         var notify = false;
         lock (this.gate)
         {
-            if (this.stopped) return;
+            if (this.stopped || this.sealedForDrain) return;
             if (this.directResponse)
             {
                 if (string.IsNullOrEmpty(value.AgentId) && value is SessionIdleEvent or SessionErrorEvent)
@@ -90,6 +123,16 @@ internal sealed class CopilotSdkRootEventQueue
                 this.receiving.Writer.TryComplete();
                 this.receiving = null;
             }
+        }
+    }
+
+    internal void SealAccepted()
+    {
+        lock (this.gate)
+        {
+            this.sealedForDrain = true;
+            this.receiving?.Writer.TryComplete();
+            this.receiving = null;
         }
     }
 

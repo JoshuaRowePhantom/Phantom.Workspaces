@@ -111,7 +111,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private ICopilotSession? copilotSession;
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
-    private int disposeStarted;
+    private readonly object disposalGate = new();
+    private Task? disposalTask;
     private readonly object subAgentStateGate = new();
     private readonly SemaphoreSlim liveSessionFetchGate = new(1, 1);
     private long liveSessionGeneration;
@@ -1425,14 +1426,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             try
             {
-                try
-                {
-                    if (routingRetirement is not null) await routingRetirement.ConfigureAwait(false);
-                }
-                finally
-                {
-                    if (retainedLease is not null) await retainedLease.DisposeAsync().ConfigureAwait(false);
-                }
+                await CompleteOwnedCleanupAsync(
+                    () => routingRetirement ?? Task.CompletedTask,
+                    () => retainedLease?.DisposeAsync().AsTask() ?? Task.CompletedTask).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -1444,6 +1440,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
                 this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
                     .LogError(exception, "Retiring Copilot child resources failed.");
+                throw;
             }
         }
     }
@@ -1467,30 +1464,59 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private async Task StopStateObserverAsync()
     {
-        this.rootEventQueue?.Stop();
-        this.stateSubscription?.Dispose();
-        this.stateSubscription = null;
-        this.rootEventQueue = null;
-        this.stateObserverCancellation?.Cancel();
-        this.stateReconciler?.Dispose();
-        if (this.stateObserverPump is { } pump) await pump.ConfigureAwait(false);
-        if (this.liveSessionPoller is { } poller) await poller.ConfigureAwait(false);
-        Task[] retirements;
-        lock (this.subAgentStateGate) retirements = this.childRetirementTasks.ToArray();
-        await Task.WhenAll(retirements).ConfigureAwait(false);
+        await CompleteOwnedCleanupAsync(
+            () => { this.rootEventQueue?.Stop(); return Task.CompletedTask; },
+            () =>
+            {
+                this.stateSubscription?.Dispose();
+                this.stateSubscription = null;
+                this.rootEventQueue = null;
+                this.stateObserverCancellation?.Cancel();
+                this.stateReconciler?.Dispose();
+                return Task.CompletedTask;
+            },
+            () => this.stateObserverPump ?? Task.CompletedTask,
+            () => this.liveSessionPoller ?? Task.CompletedTask,
+            async () =>
+            {
+                Task[] retirements;
+                lock (this.subAgentStateGate) retirements = this.childRetirementTasks.ToArray();
+                // Await separately so independently failing retirements retain their identities.
+                await CompleteOwnedCleanupAsync(retirements.Select<Task, Func<Task>>(task => () => task).ToArray()).ConfigureAwait(false);
+            },
+            async () =>
+            {
+                RunningAgentChatLease[] leases;
+                lock (this.subAgentStateGate)
+                {
+                    leases = this.liveChildLeases.Values.ToArray();
+                    this.liveChildLeases.Clear();
+                }
+                await CompleteOwnedCleanupAsync(leases.Select<RunningAgentChatLease, Func<Task>>(
+                    lease => () => lease.DisposeAsync().AsTask()).ToArray()).ConfigureAwait(false);
+            },
+            () =>
+            {
+                this.stateObserverPump = null;
+                this.liveSessionPoller = null;
+                this.stateObserverCancellation?.Dispose();
+                this.stateObserverCancellation = null;
+                this.stateReconciler = null;
+                return Task.CompletedTask;
+            }).ConfigureAwait(false);
         lock (this.subAgentStateGate) this.childRetirementTasks.Clear();
-        RunningAgentChatLease[] leases;
-        lock (this.subAgentStateGate)
+    }
+
+    private static async Task CompleteOwnedCleanupAsync(params Func<Task>[] cleanup)
+    {
+        List<Exception> failures = [];
+        foreach (var action in cleanup)
         {
-            leases = this.liveChildLeases.Values.ToArray();
-            this.liveChildLeases.Clear();
+            try { await action().ConfigureAwait(false); }
+            catch (Exception failure) { failures.Add(failure); }
         }
-        foreach (var lease in leases) await lease.DisposeAsync().ConfigureAwait(false);
-        this.stateObserverPump = null;
-        this.liveSessionPoller = null;
-        this.stateObserverCancellation?.Dispose();
-        this.stateObserverCancellation = null;
-        this.stateReconciler = null;
+        if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1) throw new AggregateException("Copilot owned resource cleanup failed.", failures);
     }
 
     /// <inheritdoc />
@@ -1595,13 +1621,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var continuation = options?.AdditionalProperties?.TryGetValue(ConsumeContinuationOptionName, out var consume) == true
             && consume is true;
+        var outputDrain = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkOutputDrain.OptionName) as CopilotSdkOutputDrain;
         var messageOptions = continuation ? null : BuildMessageOptions(messages);
         var promptSent = false;
         do
         {
-            await foreach (var update in this.RunStreamingTurnAsync(BeginTurnAsync, cancellationToken).ConfigureAwait(false))
+            await foreach (var update in this.RunStreamingTurnAsync(BeginTurnAsync, cancellationToken, outputDrain).ConfigureAwait(false))
                 yield return update;
-        } while (!continuation && !promptSent);
+        } while ((!continuation && !promptSent && outputDrain?.StopRequested != true)
+            || (outputDrain?.StopRequested == true && this.rootEventQueue?.HasPending == true));
 
         // Establishing the turn (resolving the session, creating the channel, and subscribing to
         // session events) happens inside the turn lock because RunStreamingTurnAsync invokes this
@@ -1652,7 +1680,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                                 this.terminalObservationBarriers[eventId] = barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
                             observed = barrier.Task;
                         }
-                        await observed.WaitAsync(turnCancellationToken).ConfigureAwait(false);
+                        await observed.WaitAsync(outputDrain is null ? turnCancellationToken : CancellationToken.None).ConfigureAwait(false);
                     }
                     lock (this.subAgentStateGate)
                     {
@@ -1689,6 +1717,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var rootEvents = this.rootEventQueue
                 ?? throw new InvalidOperationException("Copilot session has no root event receipt queue.");
             var eventReader = rootEvents.Acquire(continuation, out var acquiredContinuation);
+            outputDrain?.Attach(rootEvents.SealAccepted);
 
             var dispatchLoop = Task.Run(async () =>
             {
@@ -1703,7 +1732,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         .TranslateCopilotSdkSessionEvents(
                             eventReader,
                             this.loggerFactory?.CreateLogger(typeof(CopilotSdkStreamAdapter).FullName!),
-                            turnCancellationToken)
+                            outputDrain is null ? turnCancellationToken : CancellationToken.None)
                         .ConfigureAwait(false))
                     {
                         await router.RouteAsync(update).ConfigureAwait(false);
@@ -1726,7 +1755,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         "Session event dispatch failed; failing the turn.");
                     channel.Writer.TryComplete(exception);
                 }
-            }, turnCancellationToken);
+            }, outputDrain is null ? turnCancellationToken : CancellationToken.None);
 
             // Reset the teardown gate for this turn: a previous turn's cancellation may have
             // left steeringSuspended=true (issue #1142). The new turn must start unsuspended so
@@ -1784,7 +1813,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     await session.SendAsync(messageOptions!, sendCancellationToken).ConfigureAwait(false);
                     promptSent = true;
                 },
-                () => this.AbortAndInvalidateSessionAsync(session, router),
+                () => outputDrain?.StopRequested == true && rootEvents.HasPending
+                    ? Task.CompletedTask
+                    : this.AbortAndInvalidateSessionAsync(session, router),
                 () => { this.InvalidateBrokenSession(session); return Task.CompletedTask; });
         }
     }
@@ -1799,22 +1830,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     internal async IAsyncEnumerable<ChatResponseUpdate> RunStreamingTurnAsync(
         Func<CancellationToken, Task<StreamingTurnContext>> beginTurnAsync,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        CopilotSdkOutputDrain? outputDrain = null)
     {
         ArgumentNullException.ThrowIfNull(beginTurnAsync);
 
-        await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var establishmentToken = outputDrain?.StopRequested == true ? CancellationToken.None : cancellationToken;
+        await this.turnLock.WaitAsync(establishmentToken).ConfigureAwait(false);
         try
         {
             // GetReadyTurnAsync handles IOException from SendAsync by retrying once with a fresh
             // session. This is kept in a separate (non-iterator) method because async iterators
             // do not permit yield inside a try block that has catch clauses.
-            var turn = await this.GetReadyTurnAsync(beginTurnAsync, cancellationToken).ConfigureAwait(false);
+            var turn = await this.GetReadyTurnAsync(beginTurnAsync, establishmentToken).ConfigureAwait(false);
             await using (turn.Subscription)
             {
+                var readCancellationToken = outputDrain is null ? cancellationToken : CancellationToken.None;
                 await using var updates = turn.Reader
-                    .ReadAllAsync(cancellationToken)
-                    .GetAsyncEnumerator(cancellationToken);
+                    .ReadAllAsync(readCancellationToken)
+                    .GetAsyncEnumerator(readCancellationToken);
                 try
                 {
                     while (await MoveNextOrInvalidateAsync(updates, turn, cancellationToken).ConfigureAwait(false))
@@ -1824,7 +1858,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
                 finally
                 {
-                    if (cancellationToken.IsCancellationRequested)
+                    if (cancellationToken.IsCancellationRequested || outputDrain?.StopRequested == true)
                     {
                         await turn.OnCancelledAsync().ConfigureAwait(false);
                     }
@@ -2138,66 +2172,44 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// <inheritdoc />
     public void Dispose()
     {
-        // Synchronous disposal of an underlying async CLI process is not safe;
-        // callers should prefer DisposeAsync. Trigger background cleanup only.
-        if (Interlocked.CompareExchange(ref this.disposeStarted, 1, 0) != 0)
-        {
-            return;
-        }
+        // Never block a GUI caller. Observe the background fault here, while retaining the
+        // original faulted task so a later DisposeAsync still reports the cleanup failure.
+        _ = ObserveSynchronousDisposalAsync();
 
-        _ = Task.Run(this.DisposeCoreAsync);
+        async Task ObserveSynchronousDisposalAsync()
+        {
+            try { await this.GetDisposalTask().ConfigureAwait(false); }
+            catch (Exception failure)
+            {
+                this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
+                    .LogError(failure, "Disposing Copilot resources failed; asynchronous disposal retains the failure.");
+            }
+        }
     }
 
     /// <inheritdoc />
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.CompareExchange(ref this.disposeStarted, 1, 0) != 0)
-        {
-            return;
-        }
+    public ValueTask DisposeAsync() => new(this.GetDisposalTask());
 
-        await this.DisposeCoreAsync().ConfigureAwait(false);
+    private Task GetDisposalTask()
+    {
+        lock (this.disposalGate) return this.disposalTask ??= Task.Run(this.DisposeCoreAsync);
     }
 
     private async Task DisposeCoreAsync()
     {
-        try
-        {
-            await this.StopStateObserverAsync().ConfigureAwait(false);
-            var session = this.copilotSession;
-            if (session is not null)
+        await CompleteOwnedCleanupAsync(
+            this.StopStateObserverAsync,
+            () => this.copilotSession?.DisposeAsync().AsTask() ?? Task.CompletedTask,
+            () => this.copilotClient?.DisposeAsync().AsTask() ?? Task.CompletedTask,
+            () => this.DisposeRuntimeConnectionSelectionAsync().AsTask(),
+            () =>
             {
-                await session.DisposeAsync().ConfigureAwait(false);
-            }
-
-            var client = this.copilotClient;
-            if (client is not null)
-            {
-                await client.DisposeAsync().ConfigureAwait(false);
-            }
-
-            await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
-
-            this.sessionInitializationLock.Dispose();
-            this.turnLock.Dispose();
-        }
-        finally
-        {
-            try
-            {
-                if (this.credentialOwner is not null)
-                {
-                    await this.credentialOwner.DisposeAsync().ConfigureAwait(false);
-                }
-            }
-            finally
-            {
-                if (this.ownedSecretResolver is not null)
-                {
-                    await this.ownedSecretResolver.DisposeAsync().ConfigureAwait(false);
-                }
-            }
-        }
+                this.sessionInitializationLock.Dispose();
+                this.turnLock.Dispose();
+                return Task.CompletedTask;
+            },
+            () => this.credentialOwner?.DisposeAsync().AsTask() ?? Task.CompletedTask,
+            () => this.ownedSecretResolver?.DisposeAsync().AsTask() ?? Task.CompletedTask).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -22,6 +22,7 @@ internal static class SubAgentTestFakes
     internal sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly bool _exposeReceiver;
+        public Func<Task>? BeforeCreateAsync { get; init; }
 
         public List<(AgentDefinition Definition, AgentSessionId SessionId)> CreateCalls { get; } = new();
 
@@ -49,7 +50,7 @@ internal static class SubAgentTestFakes
             CreatedReceiver = null;
         }
 
-        Task<RunningAgentChatLease> IRunningAgentChatFactory.CreateAsync(
+        async Task<RunningAgentChatLease> IRunningAgentChatFactory.CreateAsync(
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
@@ -58,6 +59,7 @@ internal static class SubAgentTestFakes
             string? nameOverride,
             CancellationToken ct)
         {
+            if (this.BeforeCreateAsync is { } before) await before();
             CreateCalls.Add((definition, sessionId));
             CreateCallOverrides.Add((displayNameOverride, descriptionOverride, nameOverride));
 
@@ -93,7 +95,7 @@ internal static class SubAgentTestFakes
 
             var lease = new RunningAgentChatLease(sessionId, chat, () => ValueTask.CompletedTask);
             CreatedLease = lease;
-            return Task.FromResult(lease);
+            return lease;
         }
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>

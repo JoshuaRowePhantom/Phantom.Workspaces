@@ -36,6 +36,14 @@ public sealed class MongoDbAgentPersistenceStoreContractSlowTests : AgentPersist
     }
 
     [Fact]
+    public async Task AgentChat_RetirementPending_RealMongoRetainsFollowingTasksFinalAndContinuation()
+    {
+        await this.ResetStoreAsync();
+        await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunAsync(
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"));
+    }
+
+    [Fact]
     public async Task StoreAsync_CompletedChildTaskAndRootFinal_FreshReadRetainsBoth()
     {
         await this.ResetStoreAsync();

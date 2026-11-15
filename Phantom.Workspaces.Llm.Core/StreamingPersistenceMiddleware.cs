@@ -82,6 +82,16 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         var session = this.currentSession;
         var origin = this.documentOrigin;
         PersistedAgent? agentSnapshot = null;
+        var drain = this.inner.GetService<CopilotSdkChatClient>() is not null ? new CopilotSdkOutputDrain() : null;
+        if (drain is not null)
+        {
+            options = options?.Clone() ?? new();
+            options.AdditionalProperties ??= [];
+            options.AdditionalProperties[CopilotSdkOutputDrain.OptionName] = drain;
+        }
+        using var cancellationRegistration = cancellationToken.Register(() => drain?.RequestStop());
+        var providerCompleted = false;
+        var providerFailed = false;
 
         var enumerator = this.inner
             .GetStreamingResponseAsync(messages, options, cancellationToken)
@@ -93,56 +103,24 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 var step = await Task.Run(
                     async () =>
                     {
-                        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                        if (!await MoveProviderAsync().ConfigureAwait(false))
                         {
+                            providerCompleted = true;
                             return (HasUpdate: false, Update: (ChatResponseUpdate?)null);
                         }
 
                         var update = enumerator.Current;
-                        if (agentSnapshot is null && session is not null)
-                        {
-                            // Native identity is established by the first provider read. Freeze
-                            // its owning snapshot before a later run can update provider metadata.
-                            var agent = this.provider.BuildPersistedAgent(session);
-                            agentSnapshot = agent with
-                            {
-                                AgentSessionJson = agent.AgentSessionJson?.DeepClone().AsBsonDocument,
-                                AgentDefinitionJson = agent.AgentDefinitionJson?.DeepClone().AsBsonDocument,
-                            };
-                        }
-                        buffer.Add(update);
-
-                        // Persist all stable messages (0..stableCount-1) before yielding this
-                        // update so that when the consumer receives each update, the preceding
-                        // stable messages are already durable. The last active message
-                        // (stableCount..N-1) is not yet stable — it may still receive more tokens.
-                        // When FinishReason is set the entire response is final.
-                        var response = buffer.ToChatResponse();
-                        var stableCount = update.FinishReason is not null
-                            ? response.Messages.Count
-                            : Math.Max(0, response.Messages.Count - 1);
-
-                        for (var i = persistedCount; i < stableCount; i++)
-                        {
-                            await PersistNextAsync(response.Messages[i]).ConfigureAwait(false);
-                        }
-                        if (update.FinishReason is not null)
-                        {
-                            // A drained autonomous batch can precede a newly sent request in the
-                            // same enumeration. Its durable final must not absorb the next task.
-                            buffer.Clear();
-                            persistedCount = 0;
-                        }
-
+                        await AcceptUpdateAsync(update).ConfigureAwait(false);
                         return (HasUpdate: true, Update: (ChatResponseUpdate?)update);
                     },
-                    cancellationToken).ConfigureAwait(false);
+                    drain is null ? cancellationToken : CancellationToken.None).ConfigureAwait(false);
 
                 if (!step.HasUpdate)
                 {
                     break;
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 yield return step.Update!;
             }
 
@@ -151,20 +129,66 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         {
             try
             {
-                // Accepted output belongs to the transcript even if the next provider read fails,
-                // cancellation wins, or the consumer stops reading. Never retry a failed write:
-                // its durable outcome may be ambiguous.
-                if (!persistenceFailed && buffer.Count > 0)
-                    await Task.Run(async () =>
-                    {
-                        var finalMessages = buffer.ToChatResponse().Messages;
-                        for (var i = persistedCount; i < finalMessages.Count; i++)
-                            await PersistNextAsync(finalMessages[i]).ConfigureAwait(false);
-                    }, CancellationToken.None).ConfigureAwait(false);
+                if (drain is not null && !providerCompleted && !providerFailed && !persistenceFailed)
+                {
+                    drain.RequestStop();
+                    while (await MoveProviderAsync().ConfigureAwait(false))
+                        await AcceptUpdateAsync(enumerator.Current).ConfigureAwait(false);
+                }
             }
             finally
             {
-                await enumerator.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    // This buffer and the provider's sealed accepted suffix have the same owner.
+                    // An ambiguous failed append must never be retried during cleanup.
+                    if (!persistenceFailed && buffer.Count > 0)
+                        await Task.Run(async () =>
+                        {
+                            var finalMessages = buffer.ToChatResponse().Messages;
+                            for (var i = persistedCount; i < finalMessages.Count; i++)
+                                await PersistNextAsync(finalMessages[i]).ConfigureAwait(false);
+                        }, CancellationToken.None).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+        }
+
+        async ValueTask<bool> MoveProviderAsync()
+        {
+            try { return await enumerator.MoveNextAsync().ConfigureAwait(false); }
+            catch { providerFailed = true; throw; }
+        }
+
+        async ValueTask AcceptUpdateAsync(ChatResponseUpdate update)
+        {
+            if (agentSnapshot is null && session is not null)
+            {
+                // Native identity is established by the first provider read. Freeze
+                // its owning snapshot before a later run can update provider metadata.
+                var agent = this.provider.BuildPersistedAgent(session);
+                agentSnapshot = agent with
+                {
+                    AgentSessionJson = agent.AgentSessionJson?.DeepClone().AsBsonDocument,
+                    AgentDefinitionJson = agent.AgentDefinitionJson?.DeepClone().AsBsonDocument,
+                };
+            }
+            buffer.Add(update);
+            var response = buffer.ToChatResponse();
+            var stableCount = update.FinishReason is not null
+                ? response.Messages.Count
+                : Math.Max(0, response.Messages.Count - 1);
+            for (var i = persistedCount; i < stableCount; i++)
+                await PersistNextAsync(response.Messages[i]).ConfigureAwait(false);
+            if (update.FinishReason is not null)
+            {
+                // An autonomous batch can precede a new request in one enumeration.
+                // Its durable final must not absorb the next task.
+                buffer.Clear();
+                persistedCount = 0;
             }
         }
 

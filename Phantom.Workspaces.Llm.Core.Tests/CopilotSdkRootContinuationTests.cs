@@ -11,6 +11,104 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class CopilotSdkRootContinuationTests
 {
     [Fact]
+    public Task AgentChat_RetirementPending_PersistsSubsequentTasksAndContinuationBeforeRelease()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        return CopilotSdkRetirementPersistenceScenario.RunAsync(() => store);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task PersistenceBlocked_AcceptedSdkSuffixSurvivesCancellationOrEarlyDisposal(bool cancel, bool gateRouting)
+    {
+        var session = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(session)));
+        var routingEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRouting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        client.SetSubAgentDependencies(new SubAgentTestFakes.FakeRunningAgentChatFactory
+        {
+            BeforeCreateAsync = async () => { routingEntered.TrySetResult(); await releaseRouting.Task; },
+        }, table);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new SerializedStore
+        {
+            BeforeStoreAsync = async () => { entered.TrySetResult(); await release.Task; },
+        };
+        var provider = new IncrementalPersistenceChatHistoryProvider(AgentDefinitionLoader.LoadAgentFromJson(Definition), store);
+        provider.SetSessionSerializer((_, _) => ValueTask.FromResult(new BsonDocument()));
+        var frameworkSession = new DrainTestSession();
+        provider.SetAgentSessionId(frameworkSession, "owned-product");
+        client.SessionEstablished += provider.SetCopilotSdkSessionId;
+        var middleware = new StreamingPersistenceMiddleware(client, provider, store);
+        middleware.SetCurrentSession(frameworkSession);
+        middleware.SetAssistantRunId("owned-run");
+        using var cancellation = new CancellationTokenSource();
+        var output = middleware.GetStreamingResponseAsync([new(ChatRole.User, "one request")], cancellationToken: cancellation.Token)
+            .GetAsyncEnumerator();
+        session.EnqueueEvent(new AssistantMessageDeltaEvent { Data = new() { MessageId = "prefix", DeltaContent = "accepted prefix" } });
+        session.EnqueueEvent(new ToolExecutionStartEvent { Data = new() { ToolCallId = "first", ToolName = "read" } });
+        session.EnqueueEvent(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "first", Success = true, Result = new() { Content = "first result" } } });
+        var blocked = ReadUntilPersistenceAsync();
+        await entered.Task;
+        var suffix = TaskFinal("suffix", "accepted suffix final");
+        session.Emit(suffix[0]);
+        if (gateRouting)
+        {
+            session.Emit(new SubagentStartedEvent
+            {
+                Id = Guid.NewGuid(), AgentId = "child",
+                Data = new() { ToolCallId = "suffix", AgentName = "task", AgentDisplayName = "Task", AgentDescription = "synthetic gate" },
+            });
+            await routingEntered.Task;
+        }
+        foreach (var value in suffix.Skip(1)) session.Emit(value);
+        foreach (var value in TaskFinal("pending", "accepted pending final")) session.Emit(value);
+        if (cancel) cancellation.Cancel();
+        releaseRouting.TrySetResult();
+        release.TrySetResult();
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await blocked);
+        else
+            await blocked;
+        await output.DisposeAsync();
+        var durable = await store.ReadMessagesAsync(new() { AgentSessionId = "owned-product" });
+        Assert.Equal(["first", "suffix", "pending"], durable.SelectMany(message => message.Contents).OfType<FunctionCallContent>().Select(call => call.CallId));
+        Assert.Equal(["first", "suffix", "pending"], durable.SelectMany(message => message.Contents).OfType<FunctionResultContent>().Select(result => result.CallId));
+        Assert.Equal(["accepted prefix", "accepted suffix final", "accepted pending final"], durable.Where(message => message.Contents.OfType<TextContent>().Any()).Select(message => message.Text));
+        Assert.Equal(session.SessionId, (await store.RestoreAsync(new() { AgentSessionId = "owned-product" }))!.Value.CopilotSdkSessionId);
+        Assert.All(durable, message => Assert.Equal("owned-run", message.AdditionalProperties![StreamingPersistenceMiddleware.AssistantRunIdProperty]?.ToString()));
+        Assert.Equal(1, session.SendAsyncCallCount);
+        Assert.False(client.HasPendingRootContinuation);
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        await using var restored = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = "owned-product",
+            AgentDefinition = null,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            ForegroundScheduler = scheduler.ExclusiveScheduler,
+        });
+        Assert.Equal(3, restored.History.SelectMany(item => item.Contents).OfType<FunctionCallContent>().Count());
+        Assert.Equal(3, restored.History.SelectMany(item => item.Contents).OfType<FunctionResultContent>().Count());
+        Assert.Contains(restored.History, item => item.Contents.OfType<TextContent>().Any(content => content.Text == "accepted pending final"));
+        foreach (var child in table.AddedChats) await child.DisposeAsync();
+
+        async Task ReadUntilPersistenceAsync()
+        {
+            while (await output.MoveNextAsync())
+                if (entered.Task.IsCompleted) return;
+        }
+    }
+
+    private sealed class DrainTestSession : Microsoft.Agents.AI.AgentSession;
+
+    [Fact]
     public async Task NonStreamingResponse_ConsumesItsOwnRootEventsWithoutDuplicateContinuation()
     {
         var final = new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = "one final", ReasoningText = "reason" } };
@@ -195,8 +293,11 @@ public sealed class CopilotSdkRootContinuationTests
     {
         private readonly InMemoryAgentPersistenceStore inner = new();
         public Exception? RestoreFailure { get; set; }
-        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default) =>
-            this.inner.StoreAsync(request with
+        public Func<Task>? BeforeStoreAsync { get; init; }
+        public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            if (this.BeforeStoreAsync is { } before) await before();
+            await this.inner.StoreAsync(request with
             {
                 NewMessages = request.NewMessages?.Select(Clone).ToArray(),
                 Agent = request.Agent with
@@ -205,6 +306,7 @@ public sealed class CopilotSdkRootContinuationTests
                     AgentSessionJson = request.Agent.AgentSessionJson?.DeepClone().AsBsonDocument,
                 },
             }, cancellationToken);
+        }
         public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default) =>
             this.RestoreFailure is { } failure ? ValueTask.FromException<PersistedAgent?>(failure)
                 : this.inner.RestoreAsync(request, cancellationToken);
