@@ -10,10 +10,11 @@ using Phantom.Workspaces.Llm.Tests;
 
 namespace Phantom.Workspaces.Web.Server.Tests;
 
-public sealed class WebAgentPersistenceStoreContractTests : AgentPersistenceStoreContractTests, IAsyncLifetime
+public class WebAgentPersistenceStoreContractTests : AgentPersistenceStoreContractTests, IAsyncLifetime
 {
     private readonly InMemoryAgentPersistenceStore backingStore = new();
     private WebApplication? app;
+    private readonly List<HttpClient> clients = [];
 
     public async Task InitializeAsync()
     {
@@ -27,9 +28,12 @@ public sealed class WebAgentPersistenceStoreContractTests : AgentPersistenceStor
 
     protected override ValueTask<IAgentPersistenceStore> CreateStoreAsync()
     {
-        return ValueTask.FromResult<IAgentPersistenceStore>(
-            new WebAgentPersistenceStore(app!.GetTestServer().CreateClient()));
+        var client = app!.GetTestServer().CreateClient();
+        this.clients.Add(client);
+        return ValueTask.FromResult(this.CreateHttpStore(client));
     }
+
+    protected virtual IAgentPersistenceStore CreateHttpStore(HttpClient client) => new WebAgentPersistenceStore(client);
 
     protected override ValueTask ResetStoreAsync()
     {
@@ -37,8 +41,15 @@ public sealed class WebAgentPersistenceStoreContractTests : AgentPersistenceStor
         return ValueTask.CompletedTask;
     }
 
+    public sealed class WebClientAgentPersistenceStoreContractTests : WebAgentPersistenceStoreContractTests
+    {
+        protected override IAgentPersistenceStore CreateHttpStore(HttpClient client) =>
+            new WebClientAgentPersistenceStore("http://localhost", client, ownsHttpClient: true);
+    }
+
     public async Task DisposeAsync()
     {
+        foreach (var client in this.clients) client.Dispose();
         if (app is not null)
         {
             await app.DisposeAsync();

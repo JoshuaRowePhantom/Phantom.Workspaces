@@ -14,6 +14,10 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Core.Tests;
+using Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
+using GitHub.Copilot;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
@@ -116,17 +120,27 @@ public sealed class ChatOutputControlLifecycleWebViewTests
             }
         });
 
-    [Fact]
-    public Task AgentChatOutputControl_CompletedTaskFinalAndNextPrompt_AreDistinctVisibleSiblings()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task AgentChatOutputControl_CompletedTaskFinalAndNextPrompt_AreDistinctVisibleSiblings(bool acceptedCancellation)
         => this.fixture.InvokeAsync(async () =>
         {
             var client = new LifecycleStreamingClient();
+            var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+            var firstSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var secondSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            native.Sending = count => { if (count == 1) firstSend.TrySetResult(); else if (count == 2) secondSend.TrySetResult(); };
+            var sdk = acceptedCancellation ? new CopilotSdkChatClient("gpt-5", "Copilot", null, null) : null;
+            sdk?.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+            var store = new GatedHistoryStore();
             await using var chat = await AgentChat.CreateAsync(new()
             {
                 AgentDefinition = CreateAgentDefinition(),
-                ConfiguredStore = new InMemoryAgentPersistenceStore(),
-                ClientOverride = client,
+                ConfiguredStore = store,
+                ClientOverride = (IChatClient?)sdk ?? client,
                 ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+                AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
             });
             using var loggerFactory = new ObservableLoggerFactory();
             await using var viewModel = new AgentViewModel(chat, "durable-root", "", loggerFactory, TaskScheduler.Default);
@@ -146,34 +160,70 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 var running = WhenChatStateAsync(chat, () => chat.RunningItems.Count > 0);
                 chat.EnqueueUserMessage("first durable prompt");
                 await running;
+                if (acceptedCancellation) await firstSend.Task;
                 Assert.True(status.IsThinking);
-                client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("durable-task", "task", new Dictionary<string, object?> { ["prompt"] = "synthetic task" })] });
-                client.First.Writer.TryWrite(new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("durable-task", "synthetic completed result")] });
+                if (acceptedCancellation)
+                {
+                    native.Emit(new ToolExecutionStartEvent { Data = new() { ToolCallId = "durable-task", ToolName = "task", Arguments = System.Text.Json.JsonSerializer.SerializeToElement(new { prompt = "synthetic task" }) } });
+                    native.Emit(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "durable-task", Success = true, Result = new() { Content = "synthetic completed result" } } });
+                }
+                else
+                {
+                    client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("durable-task", "task", new Dictionary<string, object?> { ["prompt"] = "synthetic task" })] });
+                    client.First.Writer.TryWrite(new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("durable-task", "synthetic completed result")] });
+                }
+                var prefix = acceptedCancellation ? "draft parent " : "durable parent ";
                 var streamed = WhenChatStateAsync(chat, () => chat.RunningItems.Any(run => run.Items.Any(
-                    item => item.Contents.OfType<TextContent>().Any(text => text.Text == "durable parent "))));
-                client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, MessageId = "answer", Contents = [new TextContent("durable parent ")] });
+                    item => item.Contents.OfType<TextContent>().Any(text => text.Text == prefix))));
+                if (acceptedCancellation)
+                    native.Emit(new AssistantMessageDeltaEvent { Data = new() { MessageId = "answer", DeltaContent = prefix } });
+                else client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, MessageId = "answer", Contents = [new TextContent(prefix)] });
                 await streamed;
                 browser.EndBatch();
                 var streamingDom = await EvalAsync(browser, """
                     (() => {
                       const run = document.querySelector('.chat-running-item');
-                      return {running:!!run?.getClientRects().length,text:!!run?.textContent.includes('durable parent')};
+                      return {running:!!run?.getClientRects().length,text:!!run?.textContent.includes('parent')};
                     })()
                     """);
                 Assert.Contains("\"running\":true", streamingDom, StringComparison.Ordinal);
                 Assert.Contains("\"text\":true", streamingDom, StringComparison.Ordinal);
                 var settled = WhenChatStateAsync(chat, () => chat.RunningItems.Count == 0
                     && chat.History.Any(item => item.Contents.OfType<TextContent>().Any(text => text.Text == "durable parent final")));
-                client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, MessageId = "answer", Contents = [new TextContent("final")], FinishReason = ChatFinishReason.Stop });
-                client.First.Writer.Complete();
+                Task nextRunning;
+                if (acceptedCancellation)
+                {
+                    native.Emit(new ToolExecutionStartEvent { Data = new() { ToolCallId = "accepted-late", ToolName = "read" } });
+                    native.Emit(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "accepted-late", Success = true, Result = new() { Content = "accepted old result" } } });
+                    await store.Entered.Task;
+                    native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = "durable parent final" } });
+                    native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = "durable parent final" } });
+                    native.Emit(new SessionIdleEvent { Data = new() });
+                    await chat.InterruptAsync();
+                    nextRunning = WhenChatStateAsync(chat, () => chat.RunningItems.Count > 0
+                        && chat.History.Any(item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "next durable prompt")));
+                    chat.EnqueueUserMessage("next durable prompt");
+                    Assert.DoesNotContain(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "next durable prompt");
+                    store.Release.TrySetResult();
+                }
+                else
+                {
+                    client.First.Writer.TryWrite(new() { Role = ChatRole.Assistant, MessageId = "answer", Contents = [new TextContent("final")], FinishReason = ChatFinishReason.Stop });
+                    client.First.Writer.Complete();
+                    nextRunning = Task.CompletedTask;
+                }
                 await settled;
-                Assert.False(status.IsThinking);
-                browser.EndBatch();
-                Assert.Equal("0", await EvalAsync(browser, "document.querySelectorAll('.chat-running-item').length"));
-                var nextRunning = WhenChatStateAsync(chat, () => chat.RunningItems.Count > 0
-                    && chat.History.Any(item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "next durable prompt")));
-                chat.EnqueueUserMessage("next durable prompt");
+                if (!acceptedCancellation)
+                {
+                    Assert.False(status.IsThinking);
+                    browser.EndBatch();
+                    Assert.Equal("0", await EvalAsync(browser, "document.querySelectorAll('.chat-running-item').length"));
+                    nextRunning = WhenChatStateAsync(chat, () => chat.RunningItems.Count > 0
+                        && chat.History.Any(item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "next durable prompt")));
+                    chat.EnqueueUserMessage("next durable prompt");
+                }
                 await nextRunning;
+                if (acceptedCancellation) await secondSend.Task;
                 Assert.True(status.IsThinking);
                 browser.EndBatch();
                 var result = await EvalAsync(browser, """
@@ -219,9 +269,30 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 Assert.Contains("\"taskCollapsed\":true", result, StringComparison.Ordinal);
                 Assert.Contains("\"taskBeforeFinal\":true", result, StringComparison.Ordinal);
                 Assert.Contains("\"collapsed\":true", result, StringComparison.Ordinal);
+                if (acceptedCancellation)
+                {
+                    Assert.Equal("true", await EvalAsync(browser, """
+                        (() => {
+                          const text = document.body.textContent;
+                          return !text.includes('draft parent') && text.includes('accepted old result')
+                            && text.indexOf('durable parent final') < text.indexOf('Interrupted by user.')
+                            && text.indexOf('Interrupted by user.') < text.indexOf('next durable prompt');
+                        })()
+                        """));
+                    var durable = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+                    Assert.Single(durable, message => message.MessageId == "answer" && message.Text == "durable parent final");
+                }
                 var nextSettled = WhenChatStateAsync(chat, () => chat.RunningItems.Count == 0);
-                client.Second.Writer.TryWrite(new() { Role = ChatRole.Assistant, Contents = [new TextContent("next answer")], FinishReason = ChatFinishReason.Stop });
-                client.Second.Writer.Complete();
+                if (acceptedCancellation)
+                {
+                    native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "next-answer", Content = "next answer" } });
+                    native.Emit(new SessionIdleEvent { Data = new() });
+                }
+                else
+                {
+                    client.Second.Writer.TryWrite(new() { Role = ChatRole.Assistant, Contents = [new TextContent("next answer")], FinishReason = ChatFinishReason.Stop });
+                    client.Second.Writer.Complete();
+                }
                 await nextSettled;
                 Assert.Empty(chat.RunningItems);
                 Assert.False(status.IsThinking);
@@ -231,9 +302,30 @@ public sealed class ChatOutputControlLifecycleWebViewTests
             }
             finally
             {
+                store.Release.TrySetResult();
                 window.Close();
             }
         });
+
+    private sealed class GatedHistoryStore : IAgentPersistenceStore
+    {
+        private readonly InMemoryAgentPersistenceStore inner = new();
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            if (request.NewMessages?.Any(message => message.Text == "draft parent ") == true)
+            {
+                this.Entered.TrySetResult();
+                await this.Release.Task;
+            }
+            await this.inner.StoreAsync(request, cancellationToken);
+        }
+        public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default) => this.inner.RestoreAsync(request, cancellationToken);
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default) => this.inner.ReadMessagesAsync(request, cancellationToken);
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default) => this.inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default) => this.inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
+    }
 
     private static Task WhenChatStateAsync(AgentChat chat, Func<bool> predicate)
     {

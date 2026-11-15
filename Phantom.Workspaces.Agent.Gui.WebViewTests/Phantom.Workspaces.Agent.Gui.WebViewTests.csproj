@@ -28,5 +28,9 @@
          xunit major versions. -->
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\ScriptedByokChatServer.cs" Link="ScriptedByokChatServer.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\CopilotCliLocator.cs" Link="CopilotCliLocator.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotSession.cs" Link="Infrastructure\FakeCopilotSession.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotClient.cs" Link="Infrastructure\FakeCopilotClient.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotClientFactory.cs" Link="Infrastructure\FakeCopilotClientFactory.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\SubAgentTestFakes.cs" Link="SubAgentTestFakes.cs" />
   </ItemGroup>
 </Project>
