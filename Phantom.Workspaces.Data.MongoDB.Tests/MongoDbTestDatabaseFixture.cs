@@ -1,6 +1,6 @@
-using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Driver;
 using MongoDB.Bson;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Containers;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
@@ -22,15 +22,30 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     private static readonly string DataDirectory = Path.Combine(Path.GetTempPath(), "pw-mongodb-test-data");
 
-    private readonly ContainerEngine _containerEngine =
-        new WindowsDockerDesktopEngine(NullLogger<DockerCommandRunner>.Instance);
-    private readonly MongoDbConnectionBroker _connectionBroker;
+    private readonly string? isolatedConnection;
+    private readonly Func<MongoDbConnectionDefinition, CancellationToken, ValueTask<IMongoClient>> connect;
+    private readonly Func<string, IMongoClient> createOwnedClient;
     private IMongoClient? isolatedClient;
+    private string? ownedDatabaseName;
     private bool isolatedMode;
+    private MongoDbConnectionDefinition connectionDefinition;
+    private bool initialized;
 
     public MongoDbTestDatabaseFixture()
+        : this(Environment.GetEnvironmentVariable("PHANTOM_TEST_MONGODB_CONNECTION_STRING"))
     {
-        ConnectionDefinition = new MongoDbContainerConnectionDefinition
+    }
+
+    internal MongoDbTestDatabaseFixture(string? isolatedConnection,
+        Func<MongoDbConnectionDefinition, CancellationToken, ValueTask<IMongoClient>>? connect = null,
+        Func<string, IMongoClient>? createOwnedClient = null)
+    {
+        this.isolatedConnection = isolatedConnection;
+        this.isolatedMode = isolatedConnection is not null;
+        this.connect = connect ?? ((definition, token) => new MongoDbConnectionBroker(
+            new WindowsDockerDesktopEngine(NullLogger<DockerCommandRunner>.Instance)).GetClientAsync(definition, token));
+        this.createOwnedClient = createOwnedClient ?? (connection => new MongoClient(connection));
+        this.connectionDefinition = new MongoDbContainerConnectionDefinition
         {
             ContainerName = ContainerName,
             DataDirectory = DataDirectory,
@@ -38,38 +53,45 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
             CollectionName = EntityCollectionName,
             HostPort = HostPort,
         };
-        _connectionBroker = new MongoDbConnectionBroker(_containerEngine);
     }
 
-    public MongoDbContainerConnectionDefinition ConnectionDefinition { get; }
+    public MongoDbConnectionDefinition ConnectionDefinition => this.initialized
+        ? this.connectionDefinition
+        : throw new InvalidOperationException("The MongoDB test fixture must be initialized before its connection is used.");
 
     public IMongoDatabase Database { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
-        var isolatedConnection = Environment.GetEnvironmentVariable("PHANTOM_TEST_MONGODB_CONNECTION_STRING");
-        if (!string.IsNullOrWhiteSpace(isolatedConnection))
+        if (this.isolatedMode)
         {
-            await this.InitializeOwnedClientAsync(new MongoClient(isolatedConnection),
-                "pw_mongodb_test_" + Guid.NewGuid().ToString("N"),
+            if (string.IsNullOrWhiteSpace(this.isolatedConnection))
+                throw new InvalidOperationException("PHANTOM_TEST_MONGODB_CONNECTION_STRING must be a valid MongoDB connection string when configured.");
+            _ = new MongoUrl(this.isolatedConnection);
+            var databaseName = "pw_mongodb_test_" + Guid.NewGuid().ToString("N");
+            this.connectionDefinition = MongoDbConnectionDefinition.CreateExternal(this.isolatedConnection, databaseName, EntityCollectionName);
+            await this.InitializeOwnedClientAsync(this.createOwnedClient(this.isolatedConnection), databaseName,
                 async database => { await database.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1)); });
+            this.initialized = true;
             return;
         }
         // The broker creates both bind-mount sources before starting the container.
-        var client = await _connectionBroker.GetClientAsync(ConnectionDefinition);
+        var client = await this.connect(this.connectionDefinition, CancellationToken.None);
         Database = client.GetDatabase(DatabaseName);
 
         await ResetCollectionAsync();
+        this.initialized = true;
     }
 
     public async Task DisposeAsync()
     {
+        this.initialized = false;
         if (this.isolatedMode)
         {
             if (this.isolatedClient is null) return;
             var client = this.isolatedClient;
             this.isolatedClient = null;
-            await DropOwnedDatabaseAsync(client, Database.DatabaseNamespace.DatabaseName);
+            await DropOwnedDatabaseAsync(client, this.ownedDatabaseName!);
             return;
         }
         // Leave the container running so subsequent runs reuse the warmed-up Atlas Local instance.
@@ -81,8 +103,12 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
     {
         this.isolatedMode = true;
         this.isolatedClient = client;
-        Database = client.GetDatabase(databaseName);
-        try { await initialize(Database); }
+        this.ownedDatabaseName = databaseName;
+        try
+        {
+            Database = client.GetDatabase(databaseName);
+            await initialize(Database);
+        }
         catch (Exception initializationFailure)
         {
             try { await this.DisposeAsync(); }

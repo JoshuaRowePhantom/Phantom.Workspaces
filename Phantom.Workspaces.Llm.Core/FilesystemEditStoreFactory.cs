@@ -8,6 +8,12 @@ public static class FilesystemEditStoreFactory
     public static ValueTask<IFilesystemEditStore> CreateAsync(
         string? connectionJson,
         CancellationToken cancellationToken = default)
+        => CreateAsync(connectionJson, null, cancellationToken);
+
+    internal static ValueTask<IFilesystemEditStore> CreateAsync(
+        string? connectionJson,
+        Func<MongoDbConnectionDefinition, CancellationToken, ValueTask<IMongoClient>>? clientFactory,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(connectionJson))
         {
@@ -17,13 +23,14 @@ public static class FilesystemEditStoreFactory
         var definition = ChatHistoryProviderDefinition.FromJson(connectionJson);
         return definition switch
         {
-            MongoDbChatHistoryProviderDefinition mongoDefinition => CreateMongoDbStoreAsync(mongoDefinition, cancellationToken),
+            MongoDbChatHistoryProviderDefinition mongoDefinition => CreateMongoDbStoreAsync(mongoDefinition, clientFactory, cancellationToken),
             _ => throw new InvalidOperationException($"Unsupported filesystem edit store provider: {definition.Provider}"),
         };
     }
 
     private static async ValueTask<IFilesystemEditStore> CreateMongoDbStoreAsync(
         MongoDbChatHistoryProviderDefinition mongoDefinition,
+        Func<MongoDbConnectionDefinition, CancellationToken, ValueTask<IMongoClient>>? clientFactory,
         CancellationToken cancellationToken)
     {
         MongoDbConnectionDefinition mongoConnectionDefinition;
@@ -49,8 +56,11 @@ public static class FilesystemEditStoreFactory
             throw new InvalidOperationException($"Unknown MongoDB provider type: {mongoDefinition.MongoProvider}");
         }
 
-        var broker = new MongoDbConnectionBroker();
-        var client = await broker.GetClientAsync(mongoConnectionDefinition, cancellationToken).ConfigureAwait(false);
+        var client = clientFactory is { }
+            ? await clientFactory(mongoConnectionDefinition, cancellationToken).ConfigureAwait(false)
+            : await new MongoDbConnectionBroker().GetClientAsync(mongoConnectionDefinition, cancellationToken).ConfigureAwait(false);
+        if (client is null)
+            throw new InvalidOperationException("MongoDB client factory returned no client.");
         var database = client.GetDatabase(mongoDefinition.DatabaseName);
         var collection = database.GetCollection<MongoDbFilesystemEditDocument>(mongoDefinition.CollectionName);
         return new MongoDbFilesystemEditStore(collection);

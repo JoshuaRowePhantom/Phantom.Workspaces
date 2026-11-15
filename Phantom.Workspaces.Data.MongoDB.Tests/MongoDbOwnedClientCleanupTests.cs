@@ -5,6 +5,24 @@ namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
 public sealed class MongoDbOwnedClientCleanupTests
 {
+    [Fact]
+    public async Task FailedDatabaseAcquisition_StillDropsPrivateNameAndDisposesOwnedClient()
+    {
+        var name = "pw_mongodb_test_" + Guid.NewGuid().ToString("N");
+        var failure = new IOException("database acquisition failed");
+        var client = new Mock<IMongoClient>(MockBehavior.Strict);
+        client.Setup(value => value.GetDatabase(name, null)).Throws(failure);
+        client.Setup(value => value.DropDatabaseAsync(name, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var disposable = client.As<IDisposable>();
+        disposable.Setup(value => value.Dispose());
+        var fixture = new MongoDbTestDatabaseFixture(null);
+        Assert.Same(failure, await Record.ExceptionAsync(() =>
+            fixture.InitializeOwnedClientAsync(client.Object, name, _ => Task.CompletedTask)));
+        await fixture.DisposeAsync();
+        client.Verify(value => value.DropDatabaseAsync(name, It.IsAny<CancellationToken>()), Times.Once);
+        disposable.Verify(value => value.Dispose(), Times.Once);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

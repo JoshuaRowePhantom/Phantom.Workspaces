@@ -7,7 +7,16 @@ using Phantom.Workspaces.Data.MongoDB.Tests;
 namespace Phantom.Workspaces.Tests;
 
 [CollectionDefinition(MongoDbTestDatabaseCollection.CollectionName)]
-public sealed class MongoDbTestDatabaseCollectionFixture : ICollectionFixture<MongoDbTestDatabaseFixture> { }
+public sealed class MongoDbTestDatabaseCollectionFixture : ICollectionFixture<EntityRepositoryMongoDbFixture> { }
+
+public sealed class EntityRepositoryMongoDbFixture : IAsyncLifetime
+{
+    public MongoDbTestDatabaseFixture DatabaseFixture { get; } = new();
+
+    public ValueTask InitializeAsync() => new(this.DatabaseFixture.InitializeAsync());
+
+    public ValueTask DisposeAsync() => new(this.DatabaseFixture.DisposeAsync());
+}
 
 [Trait("Category", "SlowDocker")]
 [Collection(MongoDbTestDatabaseCollection.CollectionName)]
@@ -15,18 +24,28 @@ public sealed class EntityRepositoryMongoDbSlowTests
 {
     private readonly MongoDbTestDatabaseFixture _fixture;
 
-    public EntityRepositoryMongoDbSlowTests(MongoDbTestDatabaseFixture fixture)
+    public EntityRepositoryMongoDbSlowTests(EntityRepositoryMongoDbFixture fixture)
     {
-        _fixture = fixture;
-        _fixture.ResetCollectionAsync().GetAwaiter().GetResult();
+        _fixture = fixture.DatabaseFixture;
     }
 
-    private MongoDbRepositorySource CreateMongoDbRepositorySource() => new(
-        ContainerName: MongoDbTestDatabaseFixture.ContainerName,
-        RootCollectionName: MongoDbTestDatabaseFixture.EntityCollectionName,
-        DataDirectory: _fixture.ConnectionDefinition.DataDirectory,
-        DatabaseName: MongoDbTestDatabaseFixture.DatabaseName,
-        HostPort: MongoDbTestDatabaseFixture.HostPort);
+    private Task<EntityRepository> CreateRepositoryAsync(
+        Func<IMongoDatabase, string, MongoDbEntityDataAccessLayer>? layerFactory = null)
+    {
+        var source = _fixture.ConnectionDefinition is MongoDbContainerConnectionDefinition container
+            ? new MongoDbRepositorySource(container.ContainerName, container.CollectionName,
+                container.DataDirectory, container.DatabaseName, container.HostPort)
+            : new MongoDbRepositorySource("fixture-owned-external-client", MongoDbTestDatabaseFixture.EntityCollectionName,
+                DatabaseName: _fixture.Database.DatabaseNamespace.DatabaseName);
+        return EntityRepository.CreateAsync(new EntityRepositoryInitializationOptions
+        {
+            RepositorySource = source,
+            MongoDbClientFactory = _fixture.ConnectionDefinition is MongoDbExternalConnectionDefinition
+                ? (_, _) => ValueTask.FromResult(_fixture.Database.Client)
+                : null,
+            MongoDbEntityDataAccessLayerFactory = layerFactory,
+        }, TestContext.Current.CancellationToken);
+    }
 
     private static BsonDocument CreatePreV760Doc(string entityId) => new()
     {
@@ -57,22 +76,14 @@ public sealed class EntityRepositoryMongoDbSlowTests
     {
         await _fixture.ResetCollectionAsync();
 
-        EntityRepository.TestMongoDbEntityDataAccessLayerFactory = (database, collectionName) =>
+        var entityId = Guid.NewGuid().ToString();
+        await _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities")
+            .InsertOneAsync(CreatePreV760Doc(entityId), cancellationToken: TestContext.Current.CancellationToken);
+        var exception = await Record.ExceptionAsync(async () =>
         {
-            var entityId = Guid.NewGuid().ToString();
-            var collection = database.GetCollection<BsonDocument>($"{collectionName}_entities");
-            collection.InsertOneAsync(CreatePreV760Doc(entityId)).GetAwaiter().GetResult();
-            return new MongoDbEntityDataAccessLayer(database, collectionName);
-        };
-        try
-        {
-            var exception = await Record.ExceptionAsync(() => EntityRepository.CreateAsync(CreateMongoDbRepositorySource()));
-            Assert.Null(exception);
-        }
-        finally
-        {
-            EntityRepository.TestMongoDbEntityDataAccessLayerFactory = null;
-        }
+            await using var repository = await CreateRepositoryAsync();
+        });
+        Assert.Null(exception);
     }
 
     [Fact]
@@ -80,24 +91,12 @@ public sealed class EntityRepositoryMongoDbSlowTests
     {
         await _fixture.ResetCollectionAsync();
 
-        string capturedEntityId = null!;
-        EntityRepository.TestMongoDbEntityDataAccessLayerFactory = (database, collectionName) =>
-        {
-            capturedEntityId = Guid.NewGuid().ToString();
-            var collection = database.GetCollection<BsonDocument>($"{collectionName}_entities");
-            collection.InsertOneAsync(CreatePreV760Doc(capturedEntityId)).GetAwaiter().GetResult();
-            return new MongoDbEntityDataAccessLayer(database, collectionName);
-        };
-        try
-        {
-            var repository = await EntityRepository.CreateAsync(CreateMongoDbRepositorySource());
-            var snapshots = await repository.ExportEntitySnapshotsAsync(TestContext.Current.CancellationToken);
-            Assert.Contains(new EntityId(Guid.Parse(capturedEntityId)), snapshots.Keys);
-        }
-        finally
-        {
-            EntityRepository.TestMongoDbEntityDataAccessLayerFactory = null;
-        }
+        var capturedEntityId = Guid.NewGuid().ToString();
+        await _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities")
+            .InsertOneAsync(CreatePreV760Doc(capturedEntityId), cancellationToken: TestContext.Current.CancellationToken);
+        await using var repository = await CreateRepositoryAsync();
+        var snapshots = await repository.ExportEntitySnapshotsAsync(TestContext.Current.CancellationToken);
+        Assert.Contains(new EntityId(Guid.Parse(capturedEntityId)), snapshots.Keys);
     }
 
     [Fact]
@@ -106,26 +105,17 @@ public sealed class EntityRepositoryMongoDbSlowTests
         await _fixture.ResetCollectionAsync();
 
         InstrumentedMongoDbEntityDataAccessLayer dal = null!;
-        EntityRepository.TestMongoDbEntityDataAccessLayerFactory = (database, collectionName) =>
+        await using var repository = await CreateRepositoryAsync((database, collectionName) =>
         {
             dal = new InstrumentedMongoDbEntityDataAccessLayer(database, collectionName);
             return dal;
-        };
-        try
-        {
-            await EntityRepository.CreateAsync(CreateMongoDbRepositorySource());
-
-            var callLog = dal.CallLog.ToList();
-            var ensureIndex = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.EnsureIndexesAsync));
-            var migrate = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.MigrateAsync));
-            Assert.True(ensureIndex >= 0, "EnsureIndexesAsync should have been called");
-            Assert.True(migrate >= 0, "MigrateAsync should have been called");
-            Assert.True(ensureIndex < migrate, "EnsureIndexesAsync should be called before MigrateAsync");
-        }
-        finally
-        {
-            EntityRepository.TestMongoDbEntityDataAccessLayerFactory = null;
-        }
+        });
+        var callLog = dal.CallLog.ToList();
+        var ensureIndex = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.EnsureIndexesAsync));
+        var migrate = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.MigrateAsync));
+        Assert.True(ensureIndex >= 0, "EnsureIndexesAsync should have been called");
+        Assert.True(migrate >= 0, "MigrateAsync should have been called");
+        Assert.True(ensureIndex < migrate, "EnsureIndexesAsync should be called before MigrateAsync");
     }
 
     [Fact]
@@ -134,26 +124,17 @@ public sealed class EntityRepositoryMongoDbSlowTests
         await _fixture.ResetCollectionAsync();
 
         InstrumentedMongoDbEntityDataAccessLayer dal = null!;
-        EntityRepository.TestMongoDbEntityDataAccessLayerFactory = (database, collectionName) =>
+        await using var repository = await CreateRepositoryAsync((database, collectionName) =>
         {
             dal = new InstrumentedMongoDbEntityDataAccessLayer(database, collectionName);
             return dal;
-        };
-        try
-        {
-            await EntityRepository.CreateAsync(CreateMongoDbRepositorySource());
-
-            var callLog = dal.CallLog.ToList();
-            var migrate = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.MigrateAsync));
-            var getAsync = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.GetAsync));
-            Assert.True(migrate >= 0, "MigrateAsync should have been called");
-            Assert.True(getAsync >= 0, "GetAsync should have been called");
-            Assert.True(migrate < getAsync, "MigrateAsync should be called before any GetAsync");
-        }
-        finally
-        {
-            EntityRepository.TestMongoDbEntityDataAccessLayerFactory = null;
-        }
+        });
+        var callLog = dal.CallLog.ToList();
+        var migrate = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.MigrateAsync));
+        var getAsync = callLog.IndexOf(nameof(MongoDbEntityDataAccessLayer.GetAsync));
+        Assert.True(migrate >= 0, "MigrateAsync should have been called");
+        Assert.True(getAsync >= 0, "GetAsync should have been called");
+        Assert.True(migrate < getAsync, "MigrateAsync should be called before any GetAsync");
     }
 
     private sealed class InstrumentedMongoDbEntityDataAccessLayer : MongoDbEntityDataAccessLayer

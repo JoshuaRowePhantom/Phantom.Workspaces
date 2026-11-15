@@ -23,8 +23,6 @@ public sealed class EntityRepository : IAsyncDisposable
     private readonly TaskCompletionSource disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int disposalStarted;
 
-    internal static Func<MongoDB.Driver.IMongoDatabase, string, MongoDbEntityDataAccessLayer>? TestMongoDbEntityDataAccessLayerFactory { get; set; }
-
     private EntityRepository(
         RepositorySource repositorySource,
         IDataAccessLayer coreDataAccessLayer,
@@ -86,7 +84,7 @@ public sealed class EntityRepository : IAsyncDisposable
         IDataAccessLayer underlyingDataAccessLayer;
         using (RepositoryStartupDiagnostics.Start("repository-underlying-layer"))
             underlyingDataAccessLayer = await CreateUnderlyingDataAccessLayerAsync(
-                repositorySource, options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope, cancellationToken).ConfigureAwait(false);
+                options, cancellationToken).ConfigureAwait(false);
         try
         {
             var isWebSource = repositorySource is WebRepositorySource or DevTunnelNameRepositorySource;
@@ -156,20 +154,17 @@ public sealed class EntityRepository : IAsyncDisposable
     }
 
     private static async Task<IDataAccessLayer> CreateUnderlyingDataAccessLayerAsync(
-        RepositorySource repositorySource,
-        IAccessBroker? accessBroker,
-        DevTunnelIdentityRoute? identityRoute,
-        Func<AccessPresentationScope>? presentationScope,
+        EntityRepositoryInitializationOptions options,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return repositorySource switch
+        return options.RepositorySource switch
         {
-            WebRepositorySource web => CreateWebDataAccessLayer(web, accessBroker, identityRoute, presentationScope),
+            WebRepositorySource web => CreateWebDataAccessLayer(web, options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope),
             DevTunnelNameRepositorySource devTunnel => await CreateDevTunnelNameDataAccessLayerAsync(
-                devTunnel, accessBroker, identityRoute, presentationScope, cancellationToken).ConfigureAwait(false),
+                devTunnel, options.AccessBroker, options.DevTunnelIdentityRoute, options.AccessPresentationScope, cancellationToken).ConfigureAwait(false),
             LocalGitRepositorySource git => new GitDataAccessLayer(git.Path),
-            MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo).ConfigureAwait(false),
+            MongoDbRepositorySource mongo => await CreateMongoDbDataAccessLayerAsync(mongo, options, cancellationToken).ConfigureAwait(false),
             _ => new InMemoryDataAccessLayer(),
         };
     }
@@ -430,7 +425,9 @@ public sealed class EntityRepository : IAsyncDisposable
     }
 
     private static async Task<IDataAccessLayer> CreateMongoDbDataAccessLayerAsync(
-        MongoDbRepositorySource repositorySource)
+        MongoDbRepositorySource repositorySource,
+        EntityRepositoryInitializationOptions options,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(repositorySource.ContainerName))
         {
@@ -453,12 +450,18 @@ public sealed class EntityRepository : IAsyncDisposable
             mongoDbDatabaseName,
             repositorySource.RootCollectionName,
             repositorySource.HostPort);
-        var mongoDbConnectionBroker = new MongoDbConnectionBroker();
-        var mongoDbClient = await mongoDbConnectionBroker.GetClientAsync(connectionDefinition).ConfigureAwait(false);
+        var mongoDbClient = options.MongoDbClientFactory is { } clientFactory
+            ? await clientFactory(connectionDefinition, cancellationToken).ConfigureAwait(false)
+            : await new MongoDbConnectionBroker().GetClientAsync(connectionDefinition, cancellationToken).ConfigureAwait(false);
+        if (mongoDbClient is null)
+            throw new InvalidOperationException("MongoDB client factory returned no client.");
         var mongoDbDatabase = mongoDbClient.GetDatabase(mongoDbDatabaseName);
         
-        var mongoDbDataAccessLayer = TestMongoDbEntityDataAccessLayerFactory?.Invoke(mongoDbDatabase, repositorySource.RootCollectionName)
-            ?? new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.RootCollectionName);
+        var mongoDbDataAccessLayer = options.MongoDbEntityDataAccessLayerFactory is { } layerFactory
+            ? layerFactory(mongoDbDatabase, repositorySource.RootCollectionName)
+            : new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.RootCollectionName);
+        if (mongoDbDataAccessLayer is null)
+            throw new InvalidOperationException("MongoDB data access layer factory returned no layer.");
         
         await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
         await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);

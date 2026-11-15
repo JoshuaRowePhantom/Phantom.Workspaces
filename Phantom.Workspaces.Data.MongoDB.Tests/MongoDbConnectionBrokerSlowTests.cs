@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Phantom.Workspaces.Containers;
+using Moq;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
@@ -25,10 +26,13 @@ public sealed class MongoDbConnectionBrokerSlowTests
     {
         await _fixture.ResetCollectionAsync();
 
-        var broker = new MongoDbConnectionBroker();
-        var client = await broker.GetClientAsync(_fixture.ConnectionDefinition);
-        var database = client.GetDatabase(_fixture.ConnectionDefinition.DatabaseName);
-        var collection = database.GetCollection<BsonDocument>(_fixture.ConnectionDefinition.CollectionName);
+        var engine = new Mock<ContainerEngine>(MockBehavior.Strict);
+        var broker = _fixture.ConnectionDefinition is MongoDbExternalConnectionDefinition
+            ? new MongoDbConnectionBroker(engine.Object)
+            : new MongoDbConnectionBroker();
+        using var client = (MongoClient)await broker.GetClientAsync(_fixture.ConnectionDefinition);
+        var database = client.GetDatabase(_fixture.Database.DatabaseNamespace.DatabaseName);
+        var collection = database.GetCollection<BsonDocument>(MongoDbTestDatabaseFixture.EntityCollectionName);
 
         await collection.InsertOneAsync(new BsonDocument
         {
@@ -38,6 +42,7 @@ public sealed class MongoDbConnectionBrokerSlowTests
 
         var count = await collection.CountDocumentsAsync(Builders<BsonDocument>.Filter.Empty);
         Assert.Equal(1, count);
+        engine.VerifyNoOtherCalls();
     }
 
     [Fact]

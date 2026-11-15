@@ -17,15 +17,26 @@ public sealed class FilesystemEditStoreFactorySlowTests
     public async Task CreateAsync_WithMongoDbConnection_ReturnsMongoDbFilesystemEditStore()
     {
         await this.fixture.ResetCollectionAsync();
-        var connectionDefinition = ChatHistoryProviderDefinition.CreateMongoDb(
-            provider: "container",
-            databaseName: MongoDbTestDatabaseFixture.DatabaseName,
-            collectionName: MongoDbTestDatabaseFixture.FilesystemEditCollectionName,
-            containerName: this.fixture.ConnectionDefinition.ContainerName,
-            dataDirectory: this.fixture.ConnectionDefinition.DataDirectory,
-            hostPort: MongoDbTestDatabaseFixture.HostPort);
+        var connectionDefinition = this.fixture.ConnectionDefinition switch
+        {
+            MongoDbExternalConnectionDefinition external => ChatHistoryProviderDefinition.CreateMongoDb(
+                provider: "external", databaseName: external.DatabaseName,
+                collectionName: MongoDbTestDatabaseFixture.FilesystemEditCollectionName,
+                connectionString: external.ConnectionString),
+            MongoDbContainerConnectionDefinition container => ChatHistoryProviderDefinition.CreateMongoDb(
+                provider: "container",
+                databaseName: container.DatabaseName,
+                collectionName: MongoDbTestDatabaseFixture.FilesystemEditCollectionName,
+                containerName: container.ContainerName,
+                dataDirectory: container.DataDirectory,
+                hostPort: container.HostPort),
+            _ => throw new InvalidOperationException("Unsupported fixture connection."),
+        };
 
-        var store = await FilesystemEditStoreFactory.CreateAsync(connectionDefinition.ToJson(), CancellationToken.None);
+        var store = await FilesystemEditStoreFactory.CreateAsync(connectionDefinition.ToJson(),
+            this.fixture.ConnectionDefinition is MongoDbExternalConnectionDefinition
+                ? (_, _) => ValueTask.FromResult(this.fixture.Database.Client)
+                : null, CancellationToken.None);
 
         Assert.IsType<MongoDbFilesystemEditStore>(store);
     }
