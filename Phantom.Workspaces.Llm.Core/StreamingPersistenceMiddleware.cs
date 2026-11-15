@@ -132,8 +132,11 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 if (drain is not null && !providerCompleted && !providerFailed && !persistenceFailed)
                 {
                     drain.RequestStop();
-                    while (await MoveProviderAsync().ConfigureAwait(false))
-                        await AcceptUpdateAsync(enumerator.Current).ConfigureAwait(false);
+                    await Task.Run(async () =>
+                    {
+                        while (await MoveProviderAsync().ConfigureAwait(false))
+                            await AcceptUpdateAsync(enumerator.Current).ConfigureAwait(false);
+                    }, CancellationToken.None).ConfigureAwait(false);
                 }
             }
             finally

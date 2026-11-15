@@ -36,9 +36,15 @@ public sealed class CopilotSdkRootContinuationTests
         }, table);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var foreground = new ConcurrentExclusiveSchedulerPair();
         var store = new SerializedStore
         {
-            BeforeStoreAsync = async () => { entered.TrySetResult(); await release.Task; },
+            BeforeStoreAsync = async () =>
+            {
+                Assert.NotSame(foreground.ExclusiveScheduler, TaskScheduler.Current);
+                entered.TrySetResult();
+                await release.Task;
+            },
         };
         var provider = new IncrementalPersistenceChatHistoryProvider(AgentDefinitionLoader.LoadAgentFromJson(Definition), store);
         provider.SetSessionSerializer((_, _) => ValueTask.FromResult(new BsonDocument()));
@@ -76,7 +82,8 @@ public sealed class CopilotSdkRootContinuationTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await blocked);
         else
             await blocked;
-        await output.DisposeAsync();
+        await Task.Factory.StartNew(async () => await output.DisposeAsync(), CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, foreground.ExclusiveScheduler).Unwrap();
         var durable = await store.ReadMessagesAsync(new() { AgentSessionId = "owned-product" });
         Assert.Equal(["first", "suffix", "pending"], durable.SelectMany(message => message.Contents).OfType<FunctionCallContent>().Select(call => call.CallId));
         Assert.Equal(["first", "suffix", "pending"], durable.SelectMany(message => message.Contents).OfType<FunctionResultContent>().Select(result => result.CallId));
