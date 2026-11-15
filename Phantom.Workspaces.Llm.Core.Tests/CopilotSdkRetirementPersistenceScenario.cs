@@ -182,7 +182,11 @@ internal static class CopilotSdkRetirementPersistenceScenario
         native.EnqueueEvent(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "read", Success = true, Result = new() { Content = "intervening result" } } });
         parent.EnqueueUserMessage("correction request");
         await promoted.Task;
-        var original = Assert.Single(parent.History, item => item.MessageId == "corrected");
+        var original = await Task.Factory.StartNew(() =>
+        {
+            var item = Assert.Single(parent.History, item => item.MessageId == "corrected");
+            return (item.Timestamp, item.AssistantRunId);
+        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler.ExclusiveScheduler);
         var before = await freshStore().ReadMessagesAsync(new() { AgentSessionId = productId });
         var originalMessage = Assert.Single(before, message => message.MessageId == "corrected");
         if (beforeFinal is not null) await beforeFinal();
@@ -197,7 +201,8 @@ internal static class CopilotSdkRetirementPersistenceScenario
             if (steering == 2) Assert.Same(sendFailure, outcome.Failure);
         }
         var text = prefixExtension ? "draft completed" : "authoritative replacement";
-        var settled = WhenSettledAsync(parent, "distinct final");
+        var settled = await Task.Factory.StartNew(() => WhenSettledAsync(parent, "distinct final"),
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler.ExclusiveScheduler);
         native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "corrected", Content = text } });
         native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "corrected", Content = text } });
         native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "distinct", Content = "distinct final" } });
@@ -208,17 +213,22 @@ internal static class CopilotSdkRetirementPersistenceScenario
         Assert.Equal(text, corrected.Text);
         Assert.Equal(originalMessage.CreatedAt, corrected.CreatedAt);
         Assert.Equal(Array.FindIndex(before, message => message.MessageId == "corrected"), Array.FindIndex(after, message => message.MessageId == "corrected"));
-        var live = Assert.Single(parent.History, item => item.MessageId == "corrected");
-        Assert.Equal(original.Timestamp, live.Timestamp);
-        Assert.Equal(original.AssistantRunId, live.AssistantRunId);
-        Assert.Equal(text, string.Concat(live.Contents.OfType<TextContent>().Select(content => content.Text)));
+        await Task.Factory.StartNew(() =>
+        {
+            var live = Assert.Single(parent.History, item => item.MessageId == "corrected");
+            Assert.Equal(original.Timestamp, live.Timestamp);
+            Assert.Equal(original.AssistantRunId, live.AssistantRunId);
+            Assert.Equal(text, string.Concat(live.Contents.OfType<TextContent>().Select(content => content.Text)));
+        }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler.ExclusiveScheduler);
         Assert.Equal(steering == 0 ? 1 : 2, native.SendAsyncCallCount);
         await using var restored = await AgentChat.CreateAsync(new()
         {
             AgentSessionId = productId, AgentDefinition = null, ConfiguredStore = freshStore(),
             ClientOverride = new CopilotSubAgentChatClient(), ForegroundScheduler = scheduler.ExclusiveScheduler,
         });
-        Assert.Equal(text, string.Concat(Assert.Single(restored.History, item => item.MessageId == "corrected").Contents.OfType<TextContent>().Select(content => content.Text)));
+        await Task.Factory.StartNew(() =>
+            Assert.Equal(text, string.Concat(Assert.Single(restored.History, item => item.MessageId == "corrected").Contents.OfType<TextContent>().Select(content => content.Text))),
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, scheduler.ExclusiveScheduler);
         return productId;
     }
 
