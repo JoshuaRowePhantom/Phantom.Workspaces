@@ -11,6 +11,52 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public class StreamingPersistenceMiddlewareTests
 {
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public async Task IndependentProviderAppendAndDisposeFailures_RetainEveryOriginalIdentity(bool providerFails, bool appendFails, bool disposeFails)
+    {
+        var providerFailure = new IOException("provider original");
+        var appendFailure = new InvalidOperationException("append original");
+        var disposeFailure = new ApplicationException("dispose original");
+        var store = new SpyAgentPersistenceStore { Failure = appendFails ? appendFailure : null };
+        var provider = CreateProvider(store);
+        var inner = new FailingCleanupClient(providerFails ? providerFailure : null, disposeFails ? disposeFailure : null);
+        var middleware = new StreamingPersistenceMiddleware(inner, provider, store);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => ConsumeAsync(middleware, session));
+        var expected = new Exception?[] { providerFails ? providerFailure : null, appendFailure, disposeFails ? disposeFailure : null }.Where(value => value is not null).ToArray();
+        Assert.Equal(expected.Length, failure.InnerExceptions.Count);
+        for (var index = 0; index < expected.Length; index++) Assert.Same(expected[index], failure.InnerExceptions[index]);
+        Assert.Equal(1, store.StoreCallCount);
+        Assert.Equal(1, inner.Disposals);
+    }
+
+    private sealed class FailingCleanupClient(Exception? providerFailure, Exception? disposalFailure) : IChatClient, IAsyncEnumerable<ChatResponseUpdate>, IAsyncEnumerator<ChatResponseUpdate>
+    {
+        public int Disposals { get; private set; }
+        private int reads;
+        public ChatResponseUpdate Current => MakeUpdate("accepted trailing output");
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null, CancellationToken cancellationToken = default) => this;
+        public IAsyncEnumerator<ChatResponseUpdate> GetAsyncEnumerator(CancellationToken cancellationToken = default) => this;
+        public ValueTask<bool> MoveNextAsync()
+        {
+            if (this.reads++ == 0) return ValueTask.FromResult(true);
+            return providerFailure is null ? ValueTask.FromResult(false) : ValueTask.FromException<bool>(providerFailure);
+        }
+        public ValueTask DisposeAsync()
+        {
+            this.Disposals++;
+            return disposalFailure is null ? ValueTask.CompletedTask : ValueTask.FromException(disposalFailure);
+        }
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public void Dispose() { }
+    }
+
     [Fact]
     public async Task DocumentOrigin_MessagePersistenceAndJsonReload_PreserveGenerationDirectory()
     {

@@ -56,7 +56,21 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
             };
             if (newMessages.Length > 0)
             {
-                session.Messages.AddRange(newMessages);
+                foreach (var message in newMessages)
+                {
+                    if (!StoreRequestAgent.IsReplacement(message))
+                    {
+                        session.Messages.Add(message);
+                        continue;
+                    }
+                    var runId = message.AdditionalProperties?.GetValueOrDefault(StoreRequestAgent.AssistantRunIdPropertyName)?.ToString();
+                    var index = session.Messages.FindIndex(previous => previous.MessageId == message.MessageId
+                        && string.Equals(previous.AdditionalProperties?.GetValueOrDefault(StoreRequestAgent.AssistantRunIdPropertyName)?.ToString(),
+                            runId, StringComparison.Ordinal));
+                    if (string.IsNullOrEmpty(message.MessageId) || string.IsNullOrEmpty(runId) || index < 0)
+                        throw new InvalidOperationException("Cannot replace an unknown assistant message.");
+                    session.Messages[index] = message;
+                }
             }
         }
 

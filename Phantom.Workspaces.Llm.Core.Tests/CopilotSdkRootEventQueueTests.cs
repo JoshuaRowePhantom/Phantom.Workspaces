@@ -7,6 +7,45 @@ public sealed class CopilotSdkRootEventQueueTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task UnconsumedAdmission_ReturnsAcceptedReaderBeforeLaterBatches(bool acceptedBeforeReservation)
+    {
+        var queue = new CopilotSdkRootEventQueue();
+        var first = new AssistantMessageEvent { Data = new() { MessageId = "first", Content = "first" } };
+        if (acceptedBeforeReservation) queue.Accept(first);
+        var reader = queue.Acquire(false, out var continuation);
+        var batch = new CopilotSdkRootBatch(queue, reader, continuation);
+        if (!acceptedBeforeReservation) queue.Accept(first);
+        queue.Accept(new SessionIdleEvent { Data = new() });
+        var later = new AssistantMessageEvent { Data = new() { MessageId = "later", Content = "later" } };
+        queue.Accept(later);
+        queue.Accept(new SessionIdleEvent { Data = new() });
+        batch.Dispose();
+        batch.Dispose();
+        Assert.Same(first, await queue.Acquire(true).ReadAsync());
+        Assert.Same(later, await queue.Acquire(true).ReadAsync());
+        queue.Stop();
+    }
+
+    [Fact]
+    public async Task Admission_EmptyDisposalCompletesReader_TakenReaderHasExactlyOneOwner()
+    {
+        var queue = new CopilotSdkRootEventQueue();
+        var abandoned = queue.Acquire(false);
+        new CopilotSdkRootBatch(queue, abandoned, false).Dispose();
+        Assert.False(await abandoned.WaitToReadAsync());
+        Assert.False(queue.HasPending);
+        var batch = new CopilotSdkRootBatch(queue, queue.Acquire(false), false);
+        Assert.Same(batch.Reader, batch.Take());
+        Assert.Throws<InvalidOperationException>(() => batch.Take());
+        batch.Dispose();
+        queue.Release(batch.Reader);
+        Assert.False(queue.HasPending);
+        queue.Stop();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void PersistenceDrain_StopBeforeOrAfterAttach_SealsEveryNewBatchOwner(bool before)
     {
         var drain = new CopilotSdkOutputDrain();

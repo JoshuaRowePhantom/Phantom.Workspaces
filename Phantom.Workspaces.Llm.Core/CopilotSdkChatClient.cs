@@ -148,6 +148,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal const string ConsumeContinuationOptionName = "copilot.sdk.consume-continuation";
     internal event Action? RootContinuationAvailable;
     internal bool HasPendingRootContinuation => this.rootEventQueue?.HasPending == true;
+    internal CopilotSdkRootBatch? ReserveRootBatch(bool continuation)
+    {
+        if (this.copilotSession is null) return null;
+        var owner = this.rootEventQueue;
+        if (owner is null) return null;
+        var reader = owner.Acquire(continuation, out var acquiredContinuation);
+        return new(owner, reader, acquiredContinuation);
+    }
     private volatile string? workingDirectoryOverride;
 
     /// <summary>
@@ -174,6 +182,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// <c>AgentChat</c> can record it in its visible chat history.
     /// </summary>
     internal event Action<ChatMessage>? SteeringMessageForwarded;
+    internal event Func<ChatMessage, Exception, Task>? SteeringDeliveryFailed;
+    private readonly List<Task<SteeringDeliveryOutcome>> steeringDeliveries = [];
+
+    internal Task<SteeringDeliveryOutcome[]> WaitForSteeringDeliveriesAsync()
+    {
+        lock (this.steeringDeliveries) return Task.WhenAll(this.steeringDeliveries.ToArray());
+    }
 
     /// <summary>
     /// Raised after a Copilot SDK session is created or resumed, carrying its
@@ -1477,6 +1492,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             },
             () => this.stateObserverPump ?? Task.CompletedTask,
             () => this.liveSessionPoller ?? Task.CompletedTask,
+            async () => { await this.WaitForSteeringDeliveriesAsync().ConfigureAwait(false); },
             async () =>
             {
                 Task[] retirements;
@@ -1622,6 +1638,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var continuation = options?.AdditionalProperties?.TryGetValue(ConsumeContinuationOptionName, out var consume) == true
             && consume is true;
         var outputDrain = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkOutputDrain.OptionName) as CopilotSdkOutputDrain;
+        var admittedBatch = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkRootBatch.OptionName) as CopilotSdkRootBatch;
         var messageOptions = continuation ? null : BuildMessageOptions(messages);
         var promptSent = false;
         do
@@ -1638,7 +1655,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         // invalidated out from under us.
         async Task<StreamingTurnContext> BeginTurnAsync(CancellationToken turnCancellationToken)
         {
-            var session = await this.EnsureSessionAsync(options, turnCancellationToken).ConfigureAwait(false);
+            var session = admittedBatch?.HasAcceptedOutput == true
+                ? this.copilotSession ?? throw new InvalidOperationException("The accepted root batch has no owning native session.")
+                : await this.EnsureSessionAsync(options, turnCancellationToken).ConfigureAwait(false);
             lock (this.subAgentStateGate)
                 if (this.stateObserverFailure is { } failure)
                     throw new InvalidOperationException("Copilot session observation failed.", failure);
@@ -1716,7 +1735,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
             var rootEvents = this.rootEventQueue
                 ?? throw new InvalidOperationException("Copilot session has no root event receipt queue.");
-            var eventReader = rootEvents.Acquire(continuation, out var acquiredContinuation);
+            var acquiredContinuation = admittedBatch?.HasAcceptedOutput ?? false;
+            var eventReader = admittedBatch?.Reader;
+            if (admittedBatch is not null && !ReferenceEquals(admittedBatch.Owner, rootEvents))
+                throw new InvalidOperationException("The admitted Copilot batch belongs to a different session receipt queue.");
+            if (admittedBatch is not null) eventReader = admittedBatch.Take();
+            eventReader ??= rootEvents.Acquire(continuation, out acquiredContinuation);
+            admittedBatch = null;
             outputDrain?.Attach(rootEvents.SealAccepted);
 
             var dispatchLoop = Task.Run(async () =>
@@ -1775,6 +1800,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 this.steeringSuspended = true;
                 queueSubscription.Dispose();
+                await this.WaitForSteeringDeliveriesAsync().ConfigureAwait(false);
                 try
                 {
                     rootEvents.Release(eventReader);
@@ -1810,6 +1836,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 async sendCancellationToken =>
                 {
                     if (continuation || acquiredContinuation) return;
+                    turnCancellationToken.ThrowIfCancellationRequested();
                     await session.SendAsync(messageOptions!, sendCancellationToken).ConfigureAwait(false);
                     promptSent = true;
                 },
@@ -1835,7 +1862,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         ArgumentNullException.ThrowIfNull(beginTurnAsync);
 
-        var establishmentToken = outputDrain?.StopRequested == true ? CancellationToken.None : cancellationToken;
+        var establishmentToken = outputDrain is { StopRequested: true, HasOwner: true } ? CancellationToken.None : cancellationToken;
         await this.turnLock.WaitAsync(establishmentToken).ConfigureAwait(false);
         try
         {
@@ -2044,6 +2071,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         while (this.queueManager!.TryDequeueNextImmediate(out var item))
         {
+            var deliveries = new List<Task<SteeringDeliveryOutcome>>();
             foreach (var message in item.Messages ?? [])
             {
                 var immediateOptions = BuildImmediateMessageOptions(message);
@@ -2055,38 +2083,54 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 // Record the forwarded steering message in history before sending it.
                 this.SteeringMessageForwarded?.Invoke(message);
 
-                // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and returns
-                // promptly. Errors are non-fatal for steering, but the returned Task's exception
-                // MUST be observed — otherwise a "Session not found" fault (issue #1142) is
-                // rethrown by the finalizer thread and crashes the process.
-                _ = ForwardSteeringAsync(
-                    ct => sendAsync(immediateOptions, ct),
-                    this.loggerFactory?.CreateLogger<CopilotSdkChatClient>());
+                var delivery = this.DeliverSteeringAsync(message, ct => sendAsync(immediateOptions, ct));
+                deliveries.Add(delivery);
+                lock (this.steeringDeliveries) this.steeringDeliveries.Add(delivery);
             }
+            if (item.TurnCompletion is { } completion)
+            {
+                completion.ClaimTerminal();
+                completion.CompleteAfter(RequireDeliveryAsync(deliveries));
+            }
+        }
+
+        static async Task RequireDeliveryAsync(List<Task<SteeringDeliveryOutcome>> deliveries)
+        {
+            var outcomes = await Task.WhenAll(deliveries).ConfigureAwait(false);
+            var failures = outcomes.Where(outcome => !outcome.Delivered).Select(outcome => outcome.Failure!).ToArray();
+            if (failures.Length == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+            if (failures.Length > 1) throw new AggregateException("Steering input was not delivered.", failures);
         }
     }
 
-    /// <summary>
-    /// Awaits a fire-and-forget steering <see cref="CopilotSession.SendAsync"/> call and swallows
-    /// any exception (logging it at Debug). This observes the returned Task so an unobserved
-    /// fault cannot be rethrown by the finalizer thread. GitHub issue #1142.
-    /// </summary>
+    private async Task<SteeringDeliveryOutcome> DeliverSteeringAsync(
+        ChatMessage message, Func<CancellationToken, Task> sendAsync)
+    {
+        try
+        {
+            await ForwardSteeringAsync(sendAsync, this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()).ConfigureAwait(false);
+            return new(message, null);
+        }
+        catch (Exception failure)
+        {
+            var failures = new List<Exception> { failure };
+            foreach (var handler in this.SteeringDeliveryFailed?.GetInvocationList()
+                         .Cast<Func<ChatMessage, Exception, Task>>() ?? [])
+            {
+                try { await handler(message, failure).ConfigureAwait(false); }
+                catch (Exception notificationFailure) { failures.Add(notificationFailure); }
+            }
+            return new(message, failures.Count == 1 ? failure : new AggregateException(failures));
+        }
+    }
+
     internal static async Task ForwardSteeringAsync(
         Func<CancellationToken, Task> sendAsync,
         ILogger? logger)
     {
         ArgumentNullException.ThrowIfNull(sendAsync);
 
-        try
-        {
-            await sendAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            // Steering is best-effort: the session may have been aborted/invalidated (e.g. after
-            // Ctrl-Break). Observe the fault so it cannot crash the finalizer thread.
-            logger?.LogDebug(exception, "Forwarding steering message to the Copilot session failed.");
-        }
+        await sendAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     // Drops the cached session (disposing it in the background) so the next turn creates a fresh one.
@@ -2710,6 +2754,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         public void Dispose() => Interlocked.Exchange(ref this.onDispose, null)?.Invoke();
     }
+}
+
+internal sealed record SteeringDeliveryOutcome(ChatMessage Message, Exception? Failure)
+{
+    internal bool Delivered => this.Failure is null;
 }
 
 /// <summary>

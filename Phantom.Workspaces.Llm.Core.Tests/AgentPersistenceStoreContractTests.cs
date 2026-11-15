@@ -9,6 +9,61 @@ namespace Phantom.Workspaces.Llm.Tests;
 
 public abstract class AgentPersistenceStoreContractTests
 {
+    [Fact]
+    public async Task StoreAsync_AuthoritativeReplacement_PreservesIdentityPositionAndOtherRuns()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var agent = CreatePersistedAgent("replacement-contract", "replacement");
+        var timestamp = DateTimeOffset.Parse("2025-01-01T00:00:00Z");
+        ChatMessage Message(string id, string run, string text) => new(ChatRole.Assistant, text)
+        {
+            MessageId = id, CreatedAt = timestamp,
+            AdditionalProperties = new() { [StoreRequestAgent.AssistantRunIdPropertyName] = run },
+        };
+        await store.StoreAsync(new()
+        {
+            Agent = agent, NewMessages =
+            [
+                Message("same-id", "original-run", "draft"),
+                Message("distinct-id", "original-run", "unchanged"),
+                Message("same-id", "different-run", "different answer"),
+            ],
+        });
+        var replacement = Message("same-id", "original-run", "authoritative replacement");
+        replacement.AdditionalProperties![StoreRequestAgent.ReplacementPropertyName] = true;
+        // JSON boundaries must not change identity matching or replacement disposition.
+        replacement = System.Text.Json.JsonSerializer.Deserialize<ChatMessage>(
+            System.Text.Json.JsonSerializer.Serialize(replacement, AIJsonUtilities.DefaultOptions), AIJsonUtilities.DefaultOptions)!;
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [replacement] });
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [replacement] });
+        var messages = await store.ReadMessagesAsync(new() { AgentSessionId = agent.AgentSessionId });
+        Assert.Equal(["authoritative replacement", "unchanged", "different answer"], messages.Select(message => message.Text).ToArray());
+        Assert.Equal(["same-id", "distinct-id", "same-id"], messages.Select(message => message.MessageId!).ToArray());
+        Assert.All(messages, message => Assert.Equal(timestamp, message.CreatedAt));
+    }
+
+    [Fact]
+    public async Task StoreAsync_UnknownReplacement_FailsWithoutAppendingOrResettingHistory()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var agent = CreatePersistedAgent("unknown-replacement-contract", "replacement");
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [new(ChatRole.User, "retained")] });
+        var replacement = new ChatMessage(ChatRole.Assistant, "unknown")
+        {
+            MessageId = "unknown",
+            AdditionalProperties = new()
+            {
+                [StoreRequestAgent.AssistantRunIdPropertyName] = "unknown-run",
+                [StoreRequestAgent.ReplacementPropertyName] = true,
+            },
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await store.StoreAsync(new() { Agent = agent, NewMessages = [replacement] }));
+        Assert.Equal("retained", Assert.Single(await store.ReadMessagesAsync(new() { AgentSessionId = agent.AgentSessionId })).Text);
+    }
+
     [Theory]
     [InlineData("cancelled")]
     [InlineData("failed")]

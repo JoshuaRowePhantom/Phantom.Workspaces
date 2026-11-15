@@ -14,6 +14,8 @@ internal sealed class FakeCopilotSession : ICopilotSession
     public string SessionId { get; set; } = "fake-session-id";
     public Action<Action<SessionEvent>>? OnSubscribe { get; set; }
     public int SendAsyncCallCount { get; private set; }
+    public Action<int>? Sending { get; set; }
+    public Func<MessageOptions, CancellationToken, Task>? SendHandler { get; set; }
     public AssistantMessageEvent? SendAndWaitResult { get; set; }
     public int SubscriberCount
     {
@@ -89,6 +91,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
             subscribersCopy = this.subscribers.ToList();
         }
 
+        this.Sending?.Invoke(this.SendAsyncCallCount);
         foreach (var sessionEvent in eventsToFire)
         {
             foreach (var subscriber in subscribersCopy)
@@ -97,7 +100,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
             }
         }
 
-        return Task.CompletedTask;
+        return this.SendHandler?.Invoke(options, cancellationToken) ?? Task.CompletedTask;
     }
 
     public Task AbortAsync(CancellationToken cancellationToken)

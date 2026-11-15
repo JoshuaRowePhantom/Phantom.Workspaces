@@ -162,16 +162,22 @@ public static class CopilotSdkStreamAdapter
                     var rootMessageKey = rootFinal.Data.MessageId ?? string.Empty;
                     var coveredText = rootTextByMessage.TryGetValue(rootMessageKey, out var coverage)
                         ? coverage.ToString() : string.Empty;
-                    if (!rootFinal.Data.Content.StartsWith(coveredText, StringComparison.Ordinal))
-                        throw new InvalidOperationException("Copilot root final text conflicts with accepted streamed message coverage.");
-                    if (coveredText.Length < rootFinal.Data.Content.Length)
+                    var replacesCoverage = !rootFinal.Data.Content.StartsWith(coveredText, StringComparison.Ordinal);
+                    if (replacesCoverage || coveredText.Length < rootFinal.Data.Content.Length)
                     {
                         rootTextByMessage[rootMessageKey] = new StringBuilder(rootFinal.Data.Content);
+                        var finalText = new TextContent(replacesCoverage
+                            ? rootFinal.Data.Content : rootFinal.Data.Content[coveredText.Length..]);
+                        if (replacesCoverage)
+                            finalText.AdditionalProperties = new()
+                            {
+                                [Phantom.Workspaces.Llm.Interfaces.StoreRequestAgent.ReplacementPropertyName] = true,
+                            };
                         yield return new ChatResponseUpdate
                         {
                             MessageId = rootFinal.Data.MessageId,
                             Role = ChatRole.Assistant,
-                            Contents = [new TextContent(rootFinal.Data.Content[coveredText.Length..])],
+                            Contents = [finalText],
                         };
                     }
                     break;

@@ -18,6 +18,7 @@ public sealed class AgentChatHistoryCollection : ReadOnlyObservableCollection<Ag
     }
 
     internal void Add(AgentChatHistoryItem item) => this.items.Add(item);
+    internal void Replace(int index, AgentChatHistoryItem item) => this.items[index] = item;
 
     internal void Insert(int index, AgentChatHistoryItem item) => this.items.Insert(index, item);
 

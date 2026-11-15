@@ -14,6 +14,102 @@ internal static class CopilotSdkRetirementPersistenceScenario
         {"kind":"prompt","name":"retirement-root","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
         """;
 
+    internal static async Task<string> RunAdmissionAsync(Func<IAgentPersistenceStore> freshStore, bool continuationBoundary)
+    {
+        var productId = Guid.NewGuid().ToString();
+        var nativeId = Guid.NewGuid().ToString();
+        var native = new FakeCopilotSession { SessionId = nativeId };
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        var factory = new RetirementFactory(scheduler.ExclusiveScheduler);
+        var gatedStore = new AdmissionStore(freshStore());
+        await using var parent = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = productId,
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = gatedStore, ClientOverride = client,
+            ForegroundScheduler = scheduler.ExclusiveScheduler,
+            AgentServices = new() { RunningAgentChatFactory = factory },
+        });
+        try
+        {
+            if (continuationBoundary)
+            {
+                native.Sending = count => EmitTaskFinal(native, count == 1 ? "initial" : "new", count == 1 ? "initial final" : "new final");
+                var initial = WhenSettledAsync(parent, "initial final");
+                parent.EnqueueUserMessage("initial request");
+                await initial;
+                var emitted = false;
+                parent.InputQueueManager.QueueStateChanged += (_, change) =>
+                {
+                    if (change.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemRemoved || emitted) return;
+                    emitted = true;
+                    EmitTaskFinal(native, "between", "old accepted final");
+                };
+            }
+            else
+            {
+                native.Sending = count =>
+                {
+                    if (count != 1) { EmitTaskFinal(native, "new", "new final"); return; }
+                    native.Emit(new AssistantMessageDeltaEvent { Data = new() { MessageId = "old-prefix", DeltaContent = "gated old prefix" } });
+                    native.Emit(new ToolExecutionStartEvent { Data = new() { ToolCallId = "initial", ToolName = "read" } });
+                    native.Emit(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "initial", Success = true, Result = new() { Content = "initial result" } } });
+                };
+                parent.EnqueueUserMessage("initial request");
+                await gatedStore.Entered.Task;
+                EmitTaskFinal(native, "old", "old accepted final");
+                await parent.InterruptAsync();
+            }
+            var finished = WhenSettledAsync(parent, "new final");
+            parent.EnqueueUserMessage("new request");
+            if (!continuationBoundary)
+                Assert.DoesNotContain(await freshStore().ReadMessagesAsync(new() { AgentSessionId = productId }), message => message.Text == "new request");
+            gatedStore.Release.TrySetResult();
+            await finished;
+            var messages = await freshStore().ReadMessagesAsync(new() { AgentSessionId = productId });
+            AssertTranscript(messages, "new final", 3);
+            Assert.True(Array.FindIndex(messages, message => message.Text == "old accepted final")
+                < Array.FindIndex(messages, message => message.Text == "new request"));
+            var live = parent.History.SelectMany(item => item.Contents).OfType<TextContent>().Select(text => text.Text).ToArray();
+            Assert.True(Array.IndexOf(live, "old accepted final") < Array.IndexOf(live, "new request"));
+            Assert.Equal(nativeId, (await freshStore().RestoreAsync(new() { AgentSessionId = productId }))!.Value.CopilotSdkSessionId);
+            Assert.Empty(await freshStore().ReadMessagesAsync(new() { AgentSessionId = nativeId }));
+            Assert.Equal(2, native.SendAsyncCallCount);
+            await parent.DisposeAsync();
+            await using var restored = await AgentChat.CreateAsync(new()
+            {
+                AgentSessionId = productId, AgentDefinition = null,
+                ConfiguredStore = freshStore(), ClientOverride = new CopilotSubAgentChatClient(),
+                ForegroundScheduler = scheduler.ExclusiveScheduler,
+            });
+            Assert.Single(restored.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "old accepted final");
+            Assert.Equal(3, restored.History.SelectMany(item => item.Contents).OfType<FunctionCallContent>().Count());
+            return productId;
+        }
+        finally { gatedStore.Release.TrySetResult(); }
+    }
+
+    private sealed class AdmissionStore(IAgentPersistenceStore inner) : IAgentPersistenceStore
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            if (request.NewMessages?.Any(message => message.Text == "gated old prefix") == true)
+            {
+                this.Entered.TrySetResult();
+                await this.Release.Task;
+            }
+            await inner.StoreAsync(request, cancellationToken);
+        }
+        public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default) => inner.RestoreAsync(request, cancellationToken);
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default) => inner.ReadMessagesAsync(request, cancellationToken);
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default) => inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default) => inner.ReadSubAgentChildIdsAsync(parentSessionId, cancellationToken);
+    }
+
     internal static async Task RunAsync(Func<IAgentPersistenceStore> freshStore)
     {
         var productId = Guid.NewGuid().ToString();

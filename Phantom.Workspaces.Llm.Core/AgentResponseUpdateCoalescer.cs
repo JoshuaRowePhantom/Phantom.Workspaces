@@ -24,7 +24,14 @@ internal static class AgentResponseUpdateCoalescer
         var result = new List<AgentChatHistoryItem>();
         MessageAccumulator? current = null;
 
-        foreach (var update in updates)
+        var reconciled = RootTextReconciliation.Normalize(updates, update => update.MessageId,
+            update => update.Contents, (update, contents) => new AgentResponseUpdate
+            {
+                Role = update.Role, AuthorName = update.AuthorName, AgentId = update.AgentId,
+                MessageId = update.MessageId, CreatedAt = update.CreatedAt, FinishReason = update.FinishReason,
+                Contents = contents,
+            });
+        foreach (var update in reconciled)
         {
             var contents = update.Contents;
             if (contents is null || contents.Count == 0)
@@ -136,6 +143,7 @@ internal static class AgentResponseUpdateCoalescer
             => new()
             {
                 Role = this.role,
+                MessageId = this.messageId,
                 Contents = this.contents.ToArray(),
                 Timestamp = this.earliestCreatedAt ?? timeProvider.GetUtcNow(),
             };

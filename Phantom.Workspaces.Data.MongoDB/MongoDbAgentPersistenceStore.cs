@@ -76,17 +76,34 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
                 .ConfigureAwait(false);
         }
 
-        var newMessages = request.NewMessages ?? [];
+        foreach (var replacement in (request.NewMessages ?? []).Where(StoreRequestAgent.IsReplacement))
+        {
+            var runId = replacement.AdditionalProperties?.GetValueOrDefault(StoreRequestAgent.AssistantRunIdPropertyName)?.ToString();
+            if (string.IsNullOrEmpty(replacement.MessageId) || string.IsNullOrEmpty(runId))
+                throw new InvalidOperationException("Assistant replacement requires message and run identities.");
+            var result = await this.messagesCollection.UpdateOneAsync(
+                Builders<MongoDbPersistedMessageDocument>.Filter.Eq(message => message.AgentSessionId, request.Agent.AgentSessionId)
+                    & Builders<MongoDbPersistedMessageDocument>.Filter.Eq(message => message.MessageId, replacement.MessageId)
+                    & Builders<MongoDbPersistedMessageDocument>.Filter.Eq(message => message.AssistantRunId, runId),
+                Builders<MongoDbPersistedMessageDocument>.Update.Set(message => message.Payload,
+                    BsonDocument.Parse(JsonSerializer.Serialize(replacement, AIJsonUtilities.DefaultOptions))),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (result.MatchedCount != 1)
+                throw new InvalidOperationException("Cannot replace an unknown assistant message.");
+        }
+        var newMessages = (request.NewMessages ?? []).Where(message => !StoreRequestAgent.IsReplacement(message)).ToArray();
         if (newMessages.Length == 0)
         {
             return;
         }
 
-        var nextSequence = await this.GetNextSequenceAsync(request.Agent.AgentSessionId, cancellationToken).ConfigureAwait(false);
+        var nextSequence = await this.AllocateSequencesAsync(request.Agent.AgentSessionId, newMessages.Length, cancellationToken).ConfigureAwait(false);
         var documents = newMessages.Select((message, index) => new MongoDbPersistedMessageDocument
         {
             AgentSessionId = request.Agent.AgentSessionId,
             Sequence = nextSequence + index,
+            MessageId = message.MessageId,
+            AssistantRunId = message.AdditionalProperties?.GetValueOrDefault(StoreRequestAgent.AssistantRunIdPropertyName)?.ToString(),
             Payload = BsonDocument.Parse(JsonSerializer.Serialize(message, AIJsonUtilities.DefaultOptions)),
         }).ToArray();
 
@@ -185,6 +202,26 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         return lastMessage is null ? 0 : lastMessage.Sequence + 1;
     }
 
+    private async Task<long> AllocateSequencesAsync(string agentSessionId, int count, CancellationToken cancellationToken)
+    {
+        var legacyNext = await this.GetNextSequenceAsync(agentSessionId, cancellationToken).ConfigureAwait(false);
+        var field = global::MongoDB.Bson.Serialization.BsonClassMap.LookupClassMap(typeof(MongoDbPersistedSessionDocument))
+            .GetMemberMap(nameof(MongoDbPersistedSessionDocument.NextSequence)).ElementName;
+        var allocation = new PipelineUpdateDefinition<MongoDbPersistedSessionDocument>(new[]
+        {
+            new BsonDocument("$set", new BsonDocument(field, new BsonDocument("$add", new BsonArray
+            {
+                new BsonDocument("$ifNull", new BsonArray { "$" + field, legacyNext }), count,
+            }))),
+        });
+        var allocated = await this.sessionsCollection.FindOneAndUpdateAsync(
+            Builders<MongoDbPersistedSessionDocument>.Filter.Eq(session => session.AgentSessionId, agentSessionId),
+            allocation,
+            new FindOneAndUpdateOptions<MongoDbPersistedSessionDocument> { IsUpsert = true, ReturnDocument = ReturnDocument.After },
+            cancellationToken).ConfigureAwait(false);
+        return allocated.NextSequence!.Value - count;
+    }
+
     public async ValueTask AddSubAgentLinkAsync(
         string parentSessionId,
         string childSessionId,
@@ -230,6 +267,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public BsonDocument? AgentSessionJson { get; init; }
 
         public string? CopilotSdkSessionId { get; init; }
+        public long? NextSequence { get; init; }
         public string? SubAgentLifecycleState { get; init; }
 
         public DateTime UpdatedUtc { get; init; }
@@ -253,6 +291,8 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         public string AgentSessionId { get; init; } = string.Empty;
 
         public long Sequence { get; init; }
+        public string? MessageId { get; init; }
+        public string? AssistantRunId { get; init; }
 
         public BsonDocument Payload { get; init; } = new();
     }

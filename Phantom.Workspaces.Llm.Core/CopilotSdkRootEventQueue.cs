@@ -3,14 +3,36 @@ using System.Threading.Channels;
 
 namespace Phantom.Workspaces.Llm;
 
+internal sealed record CopilotSdkRootBatch(
+    CopilotSdkRootEventQueue Owner, ChannelReader<SessionEvent> Reader, bool IsContinuation)
+    : IDisposable
+{
+    internal const string OptionName = "copilot.sdk.admitted-root-batch";
+    private int consumed;
+    internal bool HasAcceptedOutput => this.IsContinuation || this.Reader.TryPeek(out _);
+    internal ChannelReader<SessionEvent> Take()
+    {
+        if (Interlocked.Exchange(ref this.consumed, 1) != 0)
+            throw new InvalidOperationException("The admitted root batch was consumed more than once.");
+        return this.Reader;
+    }
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref this.consumed, 1) == 0)
+            this.Owner.ReturnUnconsumed(this.Reader, this.IsContinuation);
+    }
+}
+
 /// <summary>Transfers an accepted batch to persistence cleanup before the native turn is retired.</summary>
 internal sealed class CopilotSdkOutputDrain
 {
     internal const string OptionName = "copilot.sdk.accepted-output-drain";
+    internal const string CancellationOptionName = "copilot.sdk.owning-run-cancellation";
     private readonly object gate = new();
     private Action? seal;
     private bool stopRequested;
     internal bool StopRequested { get { lock (this.gate) return this.stopRequested; } }
+    internal bool HasOwner { get { lock (this.gate) return this.seal is not null; } }
 
     internal void Attach(Action sealBatch)
     {
@@ -39,7 +61,7 @@ internal sealed class CopilotSdkOutputDrain
 internal sealed class CopilotSdkRootEventQueue
 {
     private readonly object gate = new();
-    private readonly Queue<Channel<SessionEvent>> pending = new();
+    private readonly Queue<ChannelReader<SessionEvent>> pending = new();
     private Channel<SessionEvent>? receiving;
     private bool stopped;
     private bool directResponse;
@@ -68,7 +90,7 @@ internal sealed class CopilotSdkRootEventQueue
             {
                 if (!StartsRootOutput(value)) return;
                 this.receiving = CreateChannel();
-                this.pending.Enqueue(this.receiving);
+                this.pending.Enqueue(this.receiving.Reader);
                 notify = true;
             }
             this.receiving.Writer.TryWrite(value);
@@ -106,7 +128,7 @@ internal sealed class CopilotSdkRootEventQueue
         {
             if (this.stopped) throw new InvalidOperationException("Copilot root event receipt has stopped.");
             acquiredContinuation = this.pending.TryDequeue(out var pendingTurn);
-            if (acquiredContinuation) return pendingTurn!.Reader;
+            if (acquiredContinuation) return pendingTurn!;
             var channel = CreateChannel();
             if (continuation) channel.Writer.Complete();
             else this.receiving = channel;
@@ -123,7 +145,30 @@ internal sealed class CopilotSdkRootEventQueue
                 this.receiving.Writer.TryComplete();
                 this.receiving = null;
             }
+
         }
+    }
+
+    internal void ReturnUnconsumed(ChannelReader<SessionEvent> reader, bool continuation)
+    {
+        var notify = false;
+        lock (this.gate)
+        {
+            if (continuation || reader.TryPeek(out _))
+            {
+                var later = this.pending.ToArray();
+                this.pending.Clear();
+                this.pending.Enqueue(reader);
+                foreach (var batch in later) this.pending.Enqueue(batch);
+                notify = true;
+            }
+            else if (ReferenceEquals(this.receiving?.Reader, reader))
+            {
+                this.receiving.Writer.TryComplete();
+                this.receiving = null;
+            }
+        }
+        if (notify) this.ContinuationAvailable?.Invoke();
     }
 
     internal void SealAccepted()

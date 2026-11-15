@@ -2177,11 +2177,11 @@ public sealed partial class CopilotSdkChatClientTests
         // Immediate steering item triggers session.SendAsync on the dead session which faults
         // with "Session not found". Verify ownership directly instead of subscribing to the
         // process-global UnobservedTaskException event, which can capture unrelated finalizers.
+        var synchronousFailure = new InvalidOperationException("Session not found: synchronous");
         var synchronous = CopilotSdkChatClient.ForwardSteeringAsync(
-            _ => throw new InvalidOperationException("Session not found: synchronous"),
+            _ => throw synchronousFailure,
             logger: null);
-        await synchronous;
-        Assert.True(synchronous.IsCompletedSuccessfully);
+        Assert.Same(synchronousFailure, await Assert.ThrowsAsync<InvalidOperationException>(() => synchronous));
 
         var sendCompletion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2190,18 +2190,16 @@ public sealed partial class CopilotSdkChatClientTests
             logger: null);
 
         Assert.False(asynchronous.IsCompleted);
-        sendCompletion.SetException(
-            new InvalidOperationException("Session not found: returned task"));
-        await asynchronous;
-        Assert.True(asynchronous.IsCompletedSuccessfully);
+        var asynchronousFailure = new InvalidOperationException("Session not found: returned task");
+        sendCompletion.SetException(asynchronousFailure);
+        Assert.Same(asynchronousFailure, await Assert.ThrowsAsync<InvalidOperationException>(() => asynchronous));
     }
 
     [Fact]
     public async Task RunStreamingTurn_WhenSteeringSendThrows_TurnCompletesNormally()
     {
-        // A synchronously-throwing steering SendAsync must be swallowed so the live turn is not
-        // impacted. Also asserts that ForwardPendingImmediateMessages returns without propagating
-        // the fault out of OnQueueChanged (which is a synchronous event handler).
+        // A steering failure is owned as an undelivered outcome, not propagated out of the
+        // synchronous queue callback or misreported as a successful send.
         var queueManager = new AgentInputQueueManager();
         using var client = new CopilotSdkChatClient(
             "gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null,
@@ -2225,9 +2223,8 @@ public sealed partial class CopilotSdkChatClientTests
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.Equal(1, sendCallCount);
-        // The Immediate queue must be drained — steering worked from OnQueueChanged's perspective
-        // even though the send faulted; ForwardSteeringAsync observes and swallows the fault.
         Assert.Empty(queueManager.ImmediateQueue.Items);
+        Assert.False(Assert.Single(await client.WaitForSteeringDeliveriesAsync()).Delivered);
     }
 
     [Fact]

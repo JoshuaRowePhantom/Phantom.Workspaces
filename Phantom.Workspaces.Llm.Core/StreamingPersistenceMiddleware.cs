@@ -27,6 +27,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     private AgentDocumentOrigin? documentOrigin;
 
     internal event Action<ChatMessage>? MessagePersisted;
+    internal event Action<ChatResponseUpdate>? AcceptedUpdateRecovered;
 
     public StreamingPersistenceMiddleware(
         IChatClient inner,
@@ -60,6 +61,10 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        if (options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkOutputDrain.CancellationOptionName) is CancellationToken owningCancellation)
+            cancellationToken = owningCancellation;
+        var admittedBatch = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkRootBatch.OptionName) as CopilotSdkRootBatch;
+        if (admittedBatch?.HasAcceptedOutput != true) cancellationToken.ThrowIfCancellationRequested();
         // #1327: The per-update `ToChatResponse()` coalescing (a full text concatenation + fresh
         // char[] allocation over the whole growing buffer) and the persistence-store I/O are pure
         // compute / I/O. When this middleware is pumped from the Avalonia UI thread (the process
@@ -78,6 +83,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         var buffer = new List<ChatResponseUpdate>();
         var persistedCount = 0;
         var persistenceFailed = false;
+        var persistedById = new Dictionary<string, ChatMessage>(StringComparer.Ordinal);
         var assistantRunId = this.currentAssistantRunId ?? Guid.NewGuid().ToString("n");
         var session = this.currentSession;
         var origin = this.documentOrigin;
@@ -85,6 +91,8 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         var drain = this.inner.GetService<CopilotSdkChatClient>() is not null ? new CopilotSdkOutputDrain() : null;
         if (drain is not null)
         {
+            if (admittedBatch?.HasAcceptedOutput == true)
+                drain.Attach(admittedBatch.Owner.SealAccepted);
             options = options?.Clone() ?? new();
             options.AdditionalProperties ??= [];
             options.AdditionalProperties[CopilotSdkOutputDrain.OptionName] = drain;
@@ -92,6 +100,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         using var cancellationRegistration = cancellationToken.Register(() => drain?.RequestStop());
         var providerCompleted = false;
         var providerFailed = false;
+        Exception? primaryFailure = null;
 
         var enumerator = this.inner
             .GetStreamingResponseAsync(messages, options, cancellationToken)
@@ -103,31 +112,41 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 var step = await Task.Run(
                     async () =>
                     {
-                        if (!await MoveProviderAsync().ConfigureAwait(false))
+                        try
                         {
-                            providerCompleted = true;
-                            return (HasUpdate: false, Update: (ChatResponseUpdate?)null);
+                            if (drain is null) cancellationToken.ThrowIfCancellationRequested();
+                            if (!await MoveProviderAsync().ConfigureAwait(false))
+                            {
+                                providerCompleted = true;
+                                return (HasUpdate: false, Update: (ChatResponseUpdate?)null);
+                            }
+                            var update = enumerator.Current;
+                            await AcceptUpdateAsync(update).ConfigureAwait(false);
+                            return (HasUpdate: true, Update: (ChatResponseUpdate?)update);
                         }
-
-                        var update = enumerator.Current;
-                        await AcceptUpdateAsync(update).ConfigureAwait(false);
-                        return (HasUpdate: true, Update: (ChatResponseUpdate?)update);
+                        catch (Exception failure) { primaryFailure ??= failure; throw; }
                     },
-                    drain is null ? cancellationToken : CancellationToken.None).ConfigureAwait(false);
+                    CancellationToken.None).ConfigureAwait(false);
 
                 if (!step.HasUpdate)
                 {
                     break;
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    this.AcceptedUpdateRecovered?.Invoke(step.Update!);
+                    primaryFailure = new OperationCanceledException(cancellationToken);
+                    throw primaryFailure;
+                }
                 yield return step.Update!;
             }
 
         }
         finally
         {
-            try
+            var cleanupFailures = new List<Exception>();
+            await CaptureCleanupAsync(async () =>
             {
                 if (drain is not null && !providerCompleted && !providerFailed && !persistenceFailed)
                 {
@@ -135,35 +154,46 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                     await Task.Run(async () =>
                     {
                         while (await MoveProviderAsync().ConfigureAwait(false))
+                        {
                             await AcceptUpdateAsync(enumerator.Current).ConfigureAwait(false);
+                            this.AcceptedUpdateRecovered?.Invoke(enumerator.Current);
+                        }
                     }, CancellationToken.None).ConfigureAwait(false);
                 }
-            }
-            finally
+            }).ConfigureAwait(false);
+            await CaptureCleanupAsync(async () =>
             {
-                try
-                {
-                    // This buffer and the provider's sealed accepted suffix have the same owner.
-                    // An ambiguous failed append must never be retried during cleanup.
-                    if (!persistenceFailed && buffer.Count > 0)
-                        await Task.Run(async () =>
-                        {
-                            var finalMessages = buffer.ToChatResponse().Messages;
-                            for (var i = persistedCount; i < finalMessages.Count; i++)
-                                await PersistNextAsync(finalMessages[i]).ConfigureAwait(false);
-                        }, CancellationToken.None).ConfigureAwait(false);
-                }
-                finally
-                {
-                    await enumerator.DisposeAsync().ConfigureAwait(false);
-                }
+                // This buffer and the provider's sealed accepted suffix have the same owner.
+                // An ambiguous failed append must never be retried during cleanup.
+                if (!persistenceFailed && buffer.Count > 0)
+                    await Task.Run(async () =>
+                    {
+                        var finalMessages = buffer.ToChatResponse().Messages;
+                        for (var i = persistedCount; i < finalMessages.Count; i++)
+                            await PersistNextAsync(finalMessages[i]).ConfigureAwait(false);
+                    }, CancellationToken.None).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            await CaptureCleanupAsync(async () => await enumerator.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+            if (cleanupFailures.Count > 0)
+            {
+                var failures = new List<Exception>();
+                if (primaryFailure is not null) failures.Add(primaryFailure);
+                failures.AddRange(cleanupFailures.Where(error => !ReferenceEquals(error, primaryFailure)));
+                if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+                throw new AggregateException("Provider invocation and accepted-output cleanup failed.", failures);
+            }
+
+            async Task CaptureCleanupAsync(Func<Task> cleanup)
+            {
+                try { await cleanup().ConfigureAwait(false); }
+                catch (Exception failure) { cleanupFailures.Add(failure); }
             }
         }
 
         async ValueTask<bool> MoveProviderAsync()
         {
             try { return await enumerator.MoveNextAsync().ConfigureAwait(false); }
-            catch { providerFailed = true; throw; }
+            catch (Exception failure) { providerFailed = true; primaryFailure ??= failure; throw; }
         }
 
         async ValueTask AcceptUpdateAsync(ChatResponseUpdate update)
@@ -180,7 +210,26 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 };
             }
             buffer.Add(update);
+            var replacement = RootTextReconciliation.IsReplacement(update.Contents);
+            if (replacement)
+            {
+                var normalized = RootTextReconciliation.Normalize(buffer, value => value.MessageId,
+                    value => value.Contents, (value, contents) => new ChatResponseUpdate
+                    {
+                        Role = value.Role, AuthorName = value.AuthorName, MessageId = value.MessageId,
+                        CreatedAt = value.CreatedAt, FinishReason = value.FinishReason, Contents = contents,
+                    });
+                buffer.Clear();
+                buffer.AddRange(normalized);
+            }
             var response = buffer.ToChatResponse();
+            if (replacement && update.MessageId is { } replacedId
+                && persistedById.TryGetValue(replacedId, out var previous))
+            {
+                var corrected = response.Messages.Single(message => message.MessageId == replacedId);
+                corrected.CreatedAt = previous.CreatedAt;
+                await PersistNextAsync(corrected, replacement: true).ConfigureAwait(false);
+            }
             var stableCount = update.FinishReason is not null
                 ? response.Messages.Count
                 : Math.Max(0, response.Messages.Count - 1);
@@ -195,16 +244,23 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             }
         }
 
-        async ValueTask PersistNextAsync(ChatMessage message)
+        async ValueTask PersistNextAsync(ChatMessage message, bool replacement = false)
         {
             try
             {
+                if (replacement)
+                {
+                    message.AdditionalProperties ??= [];
+                    message.AdditionalProperties[StoreRequestAgent.ReplacementPropertyName] = true;
+                }
                 await this.PersistMessageAsync(message, assistantRunId, agentSnapshot, origin).ConfigureAwait(false);
-                persistedCount++;
+                if (!replacement) persistedCount++;
+                if (message.MessageId is { } id) persistedById[id] = message;
             }
-            catch
+            catch (Exception failure)
             {
                 persistenceFailed = true;
+                primaryFailure ??= failure;
                 throw;
             }
         }
@@ -231,7 +287,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     /// <inheritdoc />
     public void Dispose() => this.inner.Dispose();
 
-    internal const string AssistantRunIdProperty = "phantomAssistantRunId";
+    internal const string AssistantRunIdProperty = StoreRequestAgent.AssistantRunIdPropertyName;
 
     private async ValueTask PersistMessageAsync(
         ChatMessage message,

@@ -62,6 +62,13 @@ public readonly record struct PersistedAgent
 
 public readonly record struct StoreRequestAgent
 {
+    public const string ReplacementPropertyName = "phantomReplaceMessage";
+    public const string AssistantRunIdPropertyName = "phantomAssistantRunId";
+
+    public static bool IsReplacement(ChatMessage message) =>
+        message.AdditionalProperties?.GetValueOrDefault(ReplacementPropertyName) is true
+            or System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.True };
+
     public required PersistedAgent Agent { get; init; }
 
     public ChatMessage[]? NewMessages { get; init; }
@@ -76,4 +83,3 @@ public readonly record struct ReadMessagesRequest
 {
     public required string AgentSessionId { get; init; }
 }
-

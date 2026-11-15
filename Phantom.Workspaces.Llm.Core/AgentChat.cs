@@ -498,6 +498,21 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
        {
            this.copilotSdkClient = copilotChatClient;
            copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
+           copilotChatClient.SteeringDeliveryFailed += (_, failure) => Task.Factory.StartNew(() =>
+           {
+               var diagnostic = new AgentChatHistoryItem
+               {
+                   Role = AgentChatHistoryItem.DiagnosticChatRole,
+                   Timestamp = this.timeProvider.GetUtcNow(),
+                   Contents = [new ErrorContent($"Steering input was not delivered: {failure.Message}")],
+               };
+               lock (this.steeringLock)
+               {
+                   if (this.activeConflator is { } conflator)
+                       conflator.InjectInterstitialAfterCurrentUpdates(diagnostic);
+                   else this.AddHistoryItem(diagnostic);
+               }
+           }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, this.foregroundScheduler);
            // Fix #1109: RunningAgentChatFactory is mandatory for any AgentChat that hosts a Copilot
            // SDK client — the sub-agent router has no fallback path if it's missing. Fail fast so
            // callers cannot construct an AgentChat that would silently misroute sub-agent output
@@ -892,12 +907,30 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             this.GetSession().Session, cancellationToken).ConfigureAwait(false);
     }
 
-    internal Task WaitForProviderCleanupAsync(CancellationToken cancellationToken = default)
+    private static async Task RetainRunFailureAsync(Exception primaryFailure, Task cleanup)
+    {
+        try { await cleanup.ConfigureAwait(false); }
+        catch (Exception cleanupFailure) when (!ReferenceEquals(primaryFailure, cleanupFailure))
+        {
+            throw new AggregateException("Provider invocation and disposal failed.", primaryFailure, cleanupFailure);
+        }
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+    }
+
+    internal async Task WaitForProviderCleanupAsync(CancellationToken cancellationToken = default)
     {
         Task[] providerCleanup;
         lock (this.processingStateLock)
             providerCleanup = this.providerCleanupTasks.ToArray();
-        return Task.WhenAll(providerCleanup).WaitAsync(cancellationToken);
+        var observations = providerCleanup.Select(async task =>
+        {
+            try { await task.ConfigureAwait(false); return (Exception?)null; }
+            catch (Exception failure) { return failure; }
+        });
+        var results = await Task.WhenAll(observations).WaitAsync(cancellationToken).ConfigureAwait(false);
+        var failures = results.OfType<Exception>().ToArray();
+        if (failures.Length == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Length > 1) throw new AggregateException("Owned provider cleanup failed.", failures);
     }
 
     private readonly List<Task> providerCleanupTasks = [];
@@ -2049,6 +2082,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 Role = message.Role,
                 Contents = message.Contents.ToArray(),
                 Timestamp = message.CreatedAt,
+                MessageId = message.MessageId,
                 AssistantRunId = message.AdditionalProperties?.TryGetValue(
                     StreamingPersistenceMiddleware.AssistantRunIdProperty, out var runId) == true
                     ? runId?.ToString() : null,
@@ -2197,6 +2231,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             failures.Add(error);
         }
 
+        try { await this.WaitForProviderCleanupAsync().ConfigureAwait(false); }
+        catch (Exception error) { failures.Add(error); }
+
         await this.initialization.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         Task[] pendingServers;
         lock (this.toolsLock)
@@ -2245,7 +2282,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         catch (Exception error) { failures.Add(error); }
         if (failures.Count != 0)
         {
-            throw new AggregateException("Agent chat resource cleanup failed.", failures);
+            throw new AggregateException("Agent chat resource cleanup failed.",
+                failures.Distinct<Exception>(ReferenceEqualityComparer.Instance));
         }
     }
 
@@ -2423,6 +2461,22 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
 
+                var promotedReplacements = chatHistoryItems.Take(this.promotedCount)
+                    .Where((item, index) => item.MessageId is not null && index < previousItems.Length
+                        && !ReferenceEquals(item, previousItems[index])).ToArray();
+                if (promotedReplacements.Length > 0)
+                    await Task.Factory.StartNew(() =>
+                    {
+                        foreach (var replacement in promotedReplacements)
+                            for (var i = 0; i < this.owner.History.Count; i++)
+                                if (this.owner.History[i].AssistantRunId == replacement.AssistantRunId
+                                    && this.owner.History[i].MessageId == replacement.MessageId)
+                                {
+                                    this.owner.History.Replace(i, replacement);
+                                    break;
+                                }
+                    }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, this.foregroundScheduler);
+
                 // Items 0..stableCount-1 are stable (the last item is still receiving tokens).
                 // Promote any not yet promoted to History.
                 var stableCount = chatHistoryItems.Length > 1 ? chatHistoryItems.Length - 1 : 0;
@@ -2534,6 +2588,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             var reuseCount = Math.Min(previous.Length, current.Length);
             for (var i = 0; i < reuseCount; i++)
             {
+                if (previous[i].MessageId is { } id && id == current[i].MessageId
+                    && previous[i].AssistantRunId == current[i].AssistantRunId)
+                    current[i] = current[i] with { Timestamp = previous[i].Timestamp };
                 if (AreStructurallyEqual(previous[i], current[i]))
                 {
                     current[i] = previous[i];
@@ -2543,6 +2600,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
         internal static bool AreStructurallyEqual(AgentChatHistoryItem a, AgentChatHistoryItem b)
         {
+            if (!string.Equals(a.MessageId, b.MessageId, StringComparison.Ordinal)) return false;
             if (!string.Equals(a.Role.Value, b.Role.Value, StringComparison.Ordinal))
             {
                 return false;
@@ -2612,6 +2670,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
         List<ChatMessage> chatMessagesToSubmit = new List<ChatMessage>();
         List<AgentInputTurnCompletion> turnCompletions = new List<AgentInputTurnCompletion>();
+        ChatMessage[] deferredMessages = [];
+        AgentInputTurnCompletion[] deferredCompletions = [];
 
         try
         {
@@ -2621,6 +2681,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             {
                 chatMessagesToSubmit.Clear();
                 turnCompletions.Clear();
+                chatMessagesToSubmit.AddRange(deferredMessages);
+                turnCompletions.AddRange(deferredCompletions);
+                deferredMessages = [];
+                deferredCompletions = [];
                 var consumeRootContinuation = false;
                 while (chatMessagesToSubmit.Count == 0)
                 {
@@ -2651,6 +2715,17 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     }
                 }
 
+                // Decide receipt ownership before either the live prompt or its durable append.
+                // A continuation accepted during dequeue must retain the preceding turn's order.
+                var admittedBatch = this.copilotSdkClient?.ReserveRootBatch(consumeRootContinuation);
+                if (admittedBatch?.IsContinuation == true && chatMessagesToSubmit.Count > 0)
+                {
+                    deferredMessages = [.. chatMessagesToSubmit];
+                    deferredCompletions = [.. turnCompletions];
+                    chatMessagesToSubmit.Clear();
+                    turnCompletions.Clear();
+                    consumeRootContinuation = true;
+                }
                 this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
                 // A fresh per-run cancellation source (linked to the loop token) is what InterruptAsync()
@@ -2671,6 +2746,11 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 Task<bool>? pendingMoveNext = null;
                 Task<bool>? abandonedMoveNext = null;
                 PartialResponseConflator? partialResponses = null;
+                var acceptedOutputOwner = this.copilotSdkClient is not null
+                    ? this.client as StreamingPersistenceMiddleware
+                    : null;
+                Action<ChatResponseUpdate>? recoverAcceptedUpdate = null;
+                Exception? ownedRunFailure = null;
                 try
                 {
                     var assistantRunId = Guid.NewGuid().ToString("n");
@@ -2688,6 +2768,25 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             ?? throw new InvalidOperationException("Running item was unexpectedly null while starting a run."),
                         assistantRunId);
 
+                    if (acceptedOutputOwner is not null)
+                    {
+                        recoverAcceptedUpdate = update =>
+                        {
+                            var recovered = new AgentResponseUpdate
+                            {
+                                Role = update.Role,
+                                AuthorName = update.AuthorName,
+                                MessageId = update.MessageId,
+                                CreatedAt = update.CreatedAt,
+                                FinishReason = update.FinishReason,
+                                Contents = update.Contents,
+                            };
+                            this.AccumulateUsage(recovered);
+                            partialResponses.Notify(recovered);
+                        };
+                        acceptedOutputOwner.AcceptedUpdateRecovered += recoverAcceptedUpdate;
+                    }
+
                     lock (this.steeringLock)
                     {
                         this.activeConflator = partialResponses;
@@ -2697,8 +2796,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             chatMessagesToSubmit.ToArray(),
                             currentSession,
                             runCancellation.Token,
-                            consumeRootContinuation)
-                        .GetAsyncEnumerator(runCancellation.Token);
+                            consumeRootContinuation,
+                            admittedBatch)
+                        .GetAsyncEnumerator(acceptedOutputOwner is null ? runCancellation.Token : CancellationToken.None);
 
                     while (true)
                     {
@@ -2706,7 +2806,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         // loop promptly even if the provider/framework is slow to observe cancellation
                         // (for example while flushing end-of-run persistence).
                         pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
-                        if (await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
+                        if (acceptedOutputOwner is null
+                            && await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
                         {
                             abandonedMoveNext = pendingMoveNext;
                             pendingMoveNext = null;
@@ -2763,6 +2864,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
+                    if (acceptedOutputOwner is not null && Volatile.Read(ref this.disposeStarted) != 0)
+                        ownedRunFailure = ex;
                     var runningItem = currentPartialTextResponseItem
                         ?? throw new InvalidOperationException("Running item was unexpectedly null while handling a provider error.");
 
@@ -2809,10 +2912,28 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             providerEnumerator,
                             abandonedMoveNext,
                             runCancellation);
+                        if (ownedRunFailure is not null)
+                            providerCleanup = RetainRunFailureAsync(ownedRunFailure, providerCleanup);
                         lock (this.processingStateLock)
                         {
                             this.providerCleanupTasks.RemoveAll(task => task.IsCompletedSuccessfully);
                             this.providerCleanupTasks.Add(providerCleanup);
+                        }
+
+                        Exception? cleanupFailure = null;
+                        if (acceptedOutputOwner is not null)
+                        {
+                            try
+                            {
+                                await providerCleanup;
+                                if (cancellationToken.IsCancellationRequested && partialResponses is not null)
+                                    await partialResponses.DrainAsync();
+                            }
+                            catch (Exception failure) { cleanupFailure = failure; }
+                            finally
+                            {
+                                acceptedOutputOwner.AcceptedUpdateRecovered -= recoverAcceptedUpdate;
+                            }
                         }
 
                         lock (this.steeringLock)
@@ -2836,9 +2957,12 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         {
                             turnCompletion.CompleteAfter(providerCleanup);
                         }
+                        if (cleanupFailure is not null)
+                            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
                     }
                     finally
                     {
+                        admittedBatch?.Dispose();
                         this.queueManager.CompleteDequeuedWork();
                         activeTurnCompletion.TrySetResult();
                         lock (this.processingStateLock)
@@ -2857,6 +2981,11 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
         finally
         {
+            foreach (var completion in deferredCompletions)
+            {
+                completion.ClaimTerminal();
+                completion.CompleteAfter(Task.FromCanceled(new CancellationToken(canceled: true)));
+            }
             lock (signalGate) signalsStopped = true;
             this.queueManager.QueueStateChanged -= OnQueueStateChanged;
             if (continuationClient is not null)
@@ -3275,15 +3404,29 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         ChatMessage[] messages,
         AgentChatSession session,
         CancellationToken cancellationToken,
-        bool consumeRootContinuation = false)
+        bool consumeRootContinuation = false,
+        CopilotSdkRootBatch? admittedBatch = null)
     {
         var runOptions = this.CreateRunOptions();
-        if (consumeRootContinuation)
+        if (this.copilotSdkClient is not null)
+        {
+            runOptions ??= new ChatClientAgentRunOptions();
+            var owningOptions = runOptions.ChatOptions?.Clone() ?? new ChatOptions();
+            owningOptions.AdditionalProperties ??= [];
+            owningOptions.AdditionalProperties[CopilotSdkOutputDrain.CancellationOptionName] = cancellationToken;
+            runOptions.ChatOptions = owningOptions;
+            // Framework cancellation must not sever the middleware's accepted-output owner.
+            // The requested token is observed by that owner before any fresh native work.
+            cancellationToken = CancellationToken.None;
+        }
+        if (consumeRootContinuation || admittedBatch is not null)
         {
             runOptions ??= new ChatClientAgentRunOptions();
             var continuationOptions = runOptions.ChatOptions?.Clone() ?? new ChatOptions();
             continuationOptions.AdditionalProperties ??= [];
-            continuationOptions.AdditionalProperties[CopilotSdkChatClient.ConsumeContinuationOptionName] = true;
+            continuationOptions.AdditionalProperties[CopilotSdkChatClient.ConsumeContinuationOptionName] = consumeRootContinuation;
+            if (admittedBatch is not null)
+                continuationOptions.AdditionalProperties[CopilotSdkRootBatch.OptionName] = admittedBatch;
             runOptions.ChatOptions = continuationOptions;
         }
         return session

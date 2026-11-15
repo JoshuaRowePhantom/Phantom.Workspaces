@@ -239,13 +239,16 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
-    public async Task TranslateCopilotSdkSessionEvents_RootFinalConflictsWithAcceptedPrefix_FailsExplicitly()
+    public async Task TranslateCopilotSdkSessionEvents_RootFinalReplacesAcceptedPrefix_PreservesIdentityAndDeduplicatesFinal()
     {
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => TranslateAsync(
+        var updates = await TranslateAsync(
             new AssistantMessageDeltaEvent { Data = new() { MessageId = "message", DeltaContent = "accepted prefix" } },
-            new AssistantMessageEvent { Data = new() { MessageId = "message", Content = "conflicting final" } }));
-        Assert.DoesNotContain("accepted prefix", exception.Message);
-        Assert.DoesNotContain("conflicting final", exception.Message);
+            new AssistantMessageEvent { Data = new() { MessageId = "message", Content = "replacement final" } },
+            new AssistantMessageEvent { Data = new() { MessageId = "message", Content = "replacement final" } });
+        Assert.Equal(2, updates.Count);
+        Assert.Equal("message", updates[1].MessageId);
+        Assert.Equal("replacement final", updates[1].Text);
+        Assert.True(RootTextReconciliation.IsReplacement(updates[1].Contents));
     }
 
     [Fact]

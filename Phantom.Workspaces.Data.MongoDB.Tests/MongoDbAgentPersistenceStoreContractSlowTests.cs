@@ -2,6 +2,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Tests;
 using MongoDB.Bson;
 using Microsoft.Extensions.AI;
+using MongoDB.Driver;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
@@ -33,6 +34,72 @@ public sealed class MongoDbAgentPersistenceStoreContractSlowTests : AgentPersist
         await _fixture.Database.DropCollectionAsync("contract-test-agent-persistence-definitions");
         await _fixture.Database.DropCollectionAsync("contract-test-agent-persistence-messages");
         await _fixture.Database.DropCollectionAsync("contract-test-agent-persistence-sub-agent-manifests");
+    }
+
+    [Fact]
+    public async Task StoreAsync_LegacyMessagesWithoutSequenceCounter_ContinuesAfterExistingMaximum()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var agent = new PersistedAgent { AgentSessionId = Guid.NewGuid().ToString(), AgentSessionJson = new() };
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [new(ChatRole.User, "legacy")] });
+        var messages = this._fixture.Database.GetCollection<BsonDocument>("contract-test-agent-persistence-messages");
+        var legacy = await messages.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var sequenceField = legacy.Names.Single(name => name.Equals("Sequence", StringComparison.OrdinalIgnoreCase));
+        legacy[sequenceField] = 7L;
+        await messages.ReplaceOneAsync(new BsonDocument("_id", legacy["_id"]), legacy);
+        var sessions = this._fixture.Database.GetCollection<BsonDocument>("contract-test-agent-persistence-sessions");
+        var session = await sessions.Find(FilterDefinition<BsonDocument>.Empty).SingleAsync();
+        var counterField = session.Names.Single(name => name.Equals("NextSequence", StringComparison.OrdinalIgnoreCase));
+        await sessions.UpdateOneAsync(new BsonDocument("_id", session["_id"]), new BsonDocument("$unset", new BsonDocument(counterField, 1)));
+        await store.StoreAsync(new() { Agent = agent, NewMessages = [new(ChatRole.Assistant, "after legacy")] });
+        var persisted = await messages.Find(FilterDefinition<BsonDocument>.Empty).Sort(new BsonDocument(sequenceField, 1)).ToListAsync();
+        Assert.Equal([7L, 8L], persisted.Select(document => document[sequenceField].ToInt64()).ToArray());
+        Assert.Equal(["legacy", "after legacy"], (await store.ReadMessagesAsync(new() { AgentSessionId = agent.AgentSessionId })).Select(message => message.Text).ToArray());
+    }
+
+    [Fact]
+    public async Task StoreAsync_ConcurrentStoreInstances_AllocateUniqueOrderedSequenceRanges()
+    {
+        await this.ResetStoreAsync();
+        var agent = new PersistedAgent { AgentSessionId = Guid.NewGuid().ToString(), AgentSessionJson = new() };
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pending = 12;
+        var writes = Enumerable.Range(0, pending).Select(async index =>
+        {
+            if (Interlocked.Decrement(ref pending) == 0) admitted.TrySetResult();
+            await released.Task;
+            var store = new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence");
+            await store.StoreAsync(new() { Agent = agent, NewMessages = [new(ChatRole.User, $"request-{index}"), new(ChatRole.Assistant, $"answer-{index}")] });
+        }).ToArray();
+        await admitted.Task;
+        released.TrySetResult();
+        await Task.WhenAll(writes);
+        await this.AssertUniqueSequencesAsync(agent.AgentSessionId, 24);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AgentChat_AcceptedOutputAdmission_RealMongoPreservesEncounterOrderAndFreshRestore(bool continuationBoundary)
+    {
+        await this.ResetStoreAsync();
+        var productId = await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunAdmissionAsync(
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"), continuationBoundary);
+        var messages = await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId });
+        await this.AssertUniqueSequencesAsync(productId, messages.Length);
+    }
+
+    private async Task AssertUniqueSequencesAsync(string productId, int count)
+    {
+        var documents = await this._fixture.Database.GetCollection<BsonDocument>("contract-test-agent-persistence-messages")
+            .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync();
+        var sequences = documents.Select(document => document.Elements.Single(element =>
+            element.Name.Equals("Sequence", StringComparison.OrdinalIgnoreCase)).Value.ToInt64()).Order().ToArray();
+        Assert.Equal(count, sequences.Length);
+        Assert.Equal(Enumerable.Range(0, count).Select(index => (long)index), sequences);
+        Assert.Equal(count, (await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId })).Length);
     }
 
     [Fact]
