@@ -2641,7 +2641,13 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     if (chatMessagesToSubmit.Count == 0)
                     {
                         this.queueManager.CompleteDequeuedWork();
-                        await queueStateSignal.WaitAsync(cancellationToken);
+                        try { await queueStateSignal.WaitAsync(cancellationToken); }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested
+                            && this.copilotSdkClient?.HasPendingRootContinuation == true)
+                        {
+                            // Receipt precedes its wake notification. Shutdown may cancel this
+                            // idle wait in that gap, but the sealed accepted batch still owns a drain.
+                        }
                     }
                 }
 

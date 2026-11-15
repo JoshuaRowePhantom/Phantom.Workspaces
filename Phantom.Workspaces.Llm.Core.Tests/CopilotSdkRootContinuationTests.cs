@@ -123,6 +123,61 @@ public sealed class CopilotSdkRootContinuationTests
     }
 
     [Fact]
+    public async Task ParentDispose_AcceptedBatchBeforeWakeNotification_DrainsCancelledIdleWait()
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var store = new SerializedStore();
+        var foreground = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        AgentChat? owner = null;
+        Task? shutdown = null;
+        var intercept = false;
+        var accepted = TaskFinal("before-wake", "accepted before wake notification");
+        client.RootContinuationAvailable += () =>
+        {
+            if (!intercept) return;
+            foreach (var value in accepted.Skip(1)) native.Emit(value);
+            // This callback runs on the test's independent native-emission worker, outside
+            // receipt/client locks. Keep the wake notification behind completed shutdown.
+            shutdown = owner!.DisposeAsync().AsTask();
+            shutdown.GetAwaiter().GetResult();
+        };
+        await using var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(),
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ClientOverride = client, ForegroundScheduler = foreground,
+            AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+        });
+        owner = chat;
+        native.Sending = _ => EmitTaskFinal(native, "initial", "initial final");
+        var initial = WhenSettled(chat, "initial final");
+        chat.EnqueueUserMessage("initial request");
+        await initial;
+        await Task.Factory.StartNew(() => intercept = true, CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, foreground);
+        await Task.Run(() => native.Emit(accepted[0]));
+        Assert.NotNull(shutdown);
+        await shutdown;
+        var messages = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+        Assert.Single(messages, message => message.Text == "accepted before wake notification");
+        Assert.Single(messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>(), call => call.CallId == "before-wake");
+        Assert.Single(messages.SelectMany(message => message.Contents).OfType<FunctionResultContent>(), result => result.CallId == "before-wake");
+        Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "accepted before wake notification");
+        Assert.Equal(1, native.SendAsyncCallCount);
+        Assert.Equal(0, native.SubscriberCount);
+        Assert.False(client.HasPendingRootContinuation);
+        Assert.Equal(native.SessionId, (await store.RestoreAsync(new() { AgentSessionId = chat.AgentSessionId }))!.Value.CopilotSdkSessionId);
+        await using var restored = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = chat.AgentSessionId, AgentDefinition = null,
+            ConfiguredStore = store, ClientOverride = new CopilotSubAgentChatClient(), ForegroundScheduler = foreground,
+        });
+        Assert.Single(restored.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "accepted before wake notification");
+    }
+
+    [Fact]
     public async Task AgentChat_ContinuationAfterReservationBeforeSend_PrecedesDeferredPrompt()
     {
         var store = new SerializedStore();
