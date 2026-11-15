@@ -638,6 +638,7 @@ public sealed partial class CopilotSdkChatClientTests
     public async Task CopilotSdkChatClient_EvictedTaskResumption_ClosesFreshReceiverNotOlderGeneration(
         bool priorCancelled, bool cancelled, bool parentTurn)
     {
+        var foreground = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
         var session = new Infrastructure.FakeCopilotSession();
         await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
         client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(new Infrastructure.FakeCopilotClient(session)));
@@ -648,12 +649,13 @@ public sealed partial class CopilotSdkChatClientTests
         await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = LifecycleDefinition(), ConfiguredStore = store, ClientOverride = receiver,
-            ForegroundScheduler = new LifecycleInlineScheduler(),
+            ForegroundScheduler = foreground,
         });
         var child = new SubAgent(new AgentSessionId(chat.AgentSessionId), chat, null);
         var transcript = new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("retained history")] };
-        chat.History.Add(transcript);
-        using var ui = await ObserveLifecycleUiAsync(child);
+        await OnForegroundAsync(() => chat.History.Add(transcript));
+        var ui = await ObserveLifecycleUiAsync(child, foreground);
+        await using var uiLifetime = new LifecycleUiLifetime(ui, foreground);
         RegisterLifecycleChild(client, child);
         var history = new ObservableCollection<IRunningSubAgent> { child };
         var mutations = 0;
@@ -669,9 +671,16 @@ public sealed partial class CopilotSdkChatClientTests
         if (priorCancelled) await EmitObservedAsync(client, session, LifecycleFinish(cancelled: true));
         else await SnapshotAsync(client, session, 1, LifecycleTask(GitHub.Copilot.Rpc.TaskStatus.Idle));
         await SnapshotAsync(client, session, 2);
+        var resumed = await Task.Factory.StartNew(
+            () => WaitForCompletionStateAsync(chat, AgentChatCompletionState.Running, CancellationToken.None),
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
         await SnapshotAsync(client, session, 4, LifecycleTask(GitHub.Copilot.Rpc.TaskStatus.Running));
-        Assert.True(ui.Sink.RunningPanel);
-        Assert.Single(ui.Browser.VisibleItems);
+        await resumed;
+        await OnForegroundAsync(() =>
+        {
+            Assert.True(ui.Sink.RunningPanel);
+            Assert.Single(ui.Browser.VisibleItems);
+        });
         Assert.False(client.IsInvocationTerminal("call"));
         Assert.False(receiver.BeginInvocation());
         var late = LifecycleFinish(epoch: 3, cancelled: true);
@@ -679,7 +688,12 @@ public sealed partial class CopilotSdkChatClientTests
         await EmitObservedAsync(client, session, late);
         Assert.False(receiver.BeginInvocation());
         Assert.False(client.IsInvocationTerminal("call"));
+        var finishedProjection = await Task.Factory.StartNew(
+            () => WaitForCompletionStateAsync(chat, cancelled ? AgentChatCompletionState.Failed
+                : AgentChatCompletionState.Succeeded, CancellationToken.None),
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
         await EmitObservedAsync(client, session, LifecycleFinish(epoch: 5, cancelled: cancelled));
+        await finishedProjection;
         Assert.True(client.IsInvocationTerminal("call"));
         // Inspect the actual channel without relying on a timeout to detect a missed termination.
         await using var output = receiver.GetStreamingResponseAsync([]).GetAsyncEnumerator();
@@ -699,9 +713,12 @@ public sealed partial class CopilotSdkChatClientTests
         Assert.Same(chat, child.AgentChat);
         Assert.Same(child, Assert.Single(history));
         Assert.Equal(0, mutations);
-        Assert.Contains(transcript, chat.History);
-        Assert.False(ui.Sink.RunningPanel);
-        Assert.Empty(ui.Browser.VisibleItems);
+        await OnForegroundAsync(() =>
+        {
+            Assert.Contains(transcript, chat.History);
+            Assert.False(ui.Sink.RunningPanel);
+            Assert.Empty(ui.Browser.VisibleItems);
+        });
         if (parent.Pending is not null)
         {
             await RouterBarrierAsync(client, session, parent.Pending, 6);
@@ -713,6 +730,9 @@ public sealed partial class CopilotSdkChatClientTests
             await chat.WaitForLifecyclePersistenceAsync();
             Assert.Equal(raw, (await store.RestoreAsync(new() { AgentSessionId = chat.AgentSessionId }))!.Value.SubAgentLifecycleState);
         }
+
+        Task OnForegroundAsync(Action assertion) => Task.Factory.StartNew(assertion,
+            CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
     }
 
     [Theory]
