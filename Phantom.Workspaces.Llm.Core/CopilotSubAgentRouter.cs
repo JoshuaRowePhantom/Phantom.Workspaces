@@ -109,7 +109,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             InvocationToolCallId: toolCallId));
     }
 
-    internal async Task RetireChildAsync(AgentChat chat)
+    internal async Task RetireChildAsync(AgentChat chat, Action? detached = null)
     {
         var retired = new HashSet<ChildRoutingEntry>();
         lock (this.childSinks)
@@ -128,6 +128,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         lock (this.pendingChildrenByToolCall)
             foreach (var pair in this.pendingChildrenByToolCall.Where(p => retired.Contains(p.Value)).ToArray())
                 this.pendingChildrenByToolCall.Remove(pair.Key);
+        detached?.Invoke();
         foreach (var entry in retired) await entry.RetireAsync().ConfigureAwait(false);
     }
 

@@ -1227,6 +1227,7 @@ public sealed partial class CopilotSdkChatClientTests
             ClientOverride = client,
             DisplayNameOverride = "test-mcp",
         });
+        await chat.Initialization;
 
         using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         chat.EnqueueUserMessage("hello");

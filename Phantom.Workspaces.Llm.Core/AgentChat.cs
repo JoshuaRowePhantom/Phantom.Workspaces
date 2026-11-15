@@ -2595,9 +2595,20 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         await this.requiredToolInitialization.WaitAsync(cancellationToken);
         var currentSession = this.GetSession();
         using var queueStateSignal = new SemaphoreSlim(0);
+        var signalGate = new object();
+        var signalsStopped = false;
+        void SignalQueueState()
+        {
+            lock (signalGate)
+                if (!signalsStopped) queueStateSignal.Release();
+        }
         void OnQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-            => queueStateSignal.Release();
+            => SignalQueueState();
+        void OnRootContinuationAvailable() => SignalQueueState();
         this.queueManager.QueueStateChanged += OnQueueStateChanged;
+        var continuationClient = this.copilotSdkClient;
+        if (continuationClient is not null)
+            continuationClient.RootContinuationAvailable += OnRootContinuationAvailable;
 
         List<ChatMessage> chatMessagesToSubmit = new List<ChatMessage>();
         List<AgentInputTurnCompletion> turnCompletions = new List<AgentInputTurnCompletion>();
@@ -2610,8 +2621,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             {
                 chatMessagesToSubmit.Clear();
                 turnCompletions.Clear();
+                var consumeRootContinuation = false;
                 while (chatMessagesToSubmit.Count == 0)
                 {
+                    if (this.copilotSdkClient?.HasPendingRootContinuation == true)
+                    {
+                        consumeRootContinuation = true;
+                        break;
+                    }
                     while(this.queueManager.TryDequeueNextImmediateOrQueued(
                         out var agentInputItem))
                     {
@@ -2679,7 +2696,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     providerEnumerator = this.StartRun(
                             chatMessagesToSubmit.ToArray(),
                             currentSession,
-                            runCancellation.Token)
+                            runCancellation.Token,
+                            consumeRootContinuation)
                         .GetAsyncEnumerator(runCancellation.Token);
 
                     while (true)
@@ -2839,7 +2857,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
         finally
         {
+            lock (signalGate) signalsStopped = true;
             this.queueManager.QueueStateChanged -= OnQueueStateChanged;
+            if (continuationClient is not null)
+                continuationClient.RootContinuationAvailable -= OnRootContinuationAvailable;
             lock (this.processingStateLock)
             {
                 this.isBusy = false;
@@ -3253,9 +3274,18 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     private IAsyncEnumerable<AgentResponseUpdate> StartRun(
         ChatMessage[] messages,
         AgentChatSession session,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool consumeRootContinuation = false)
     {
         var runOptions = this.CreateRunOptions();
+        if (consumeRootContinuation)
+        {
+            runOptions ??= new ChatClientAgentRunOptions();
+            var continuationOptions = runOptions.ChatOptions?.Clone() ?? new ChatOptions();
+            continuationOptions.AdditionalProperties ??= [];
+            continuationOptions.AdditionalProperties[CopilotSdkChatClient.ConsumeContinuationOptionName] = true;
+            runOptions.ChatOptions = continuationOptions;
+        }
         return session
             .RunStreamAsync(messages, runOptions, cancellationToken);
     }

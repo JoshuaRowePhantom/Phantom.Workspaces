@@ -186,7 +186,10 @@ public sealed class CopilotSdkStreamAdapterTests
     [Fact]
     public async Task TranslateCopilotSdkSessionEvents_RootAssistantMessage_DoesNotDuplicateStreamedText()
     {
-        var updates = await TranslateAsync(new AssistantMessageEvent
+        var updates = await TranslateAsync(new AssistantMessageDeltaEvent
+        {
+            Data = new() { DeltaContent = "already emitted as deltas", MessageId = "message-1" },
+        }, new AssistantMessageEvent
         {
             AgentId = string.Empty,
             Data = new AssistantMessageData
@@ -196,7 +199,64 @@ public sealed class CopilotSdkStreamAdapterTests
             },
         });
 
-        Assert.Empty(updates);
+        Assert.Equal("already emitted as deltas",
+            string.Concat(updates.SelectMany(update => update.Contents).OfType<TextContent>().Select(content => content.Text)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("accepted ")]
+    public async Task TranslateCopilotSdkSessionEvents_RootFinalWithoutCompleteDeltas_EmitsMissingText(string prefix)
+    {
+        var updates = await TranslateAsync(new AssistantMessageDeltaEvent
+        {
+            Data = new() { DeltaContent = prefix, MessageId = "message-1" },
+        }, new AssistantMessageEvent
+        {
+            Data = new() { Content = "accepted answer", MessageId = "message-1" },
+        });
+
+        Assert.Equal("accepted answer",
+            string.Concat(updates.SelectMany(update => update.Contents).OfType<TextContent>().Select(content => content.Text)));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_RootFinalCoverage_IsMessageScoped()
+    {
+        var updates = await TranslateAsync(new AssistantMessageDeltaEvent
+        {
+            Data = new() { DeltaContent = "same", MessageId = "first" },
+        }, new AssistantMessageEvent
+        {
+            Data = new() { Content = "same", MessageId = "first" },
+        }, new AssistantMessageEvent
+        {
+            Data = new() { Content = "same", MessageId = "second" },
+        });
+
+        Assert.Equal(["same", "same"],
+            updates.SelectMany(update => update.Contents).OfType<TextContent>().Select(content => content.Text).ToArray());
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_RootFinalConflictsWithAcceptedPrefix_FailsExplicitly()
+    {
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => TranslateAsync(
+            new AssistantMessageDeltaEvent { Data = new() { MessageId = "message", DeltaContent = "accepted prefix" } },
+            new AssistantMessageEvent { Data = new() { MessageId = "message", Content = "conflicting final" } }));
+        Assert.DoesNotContain("accepted prefix", exception.Message);
+        Assert.DoesNotContain("conflicting final", exception.Message);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ChildIdle_DoesNotEndParentStream()
+    {
+        var updates = await TranslateAsync(
+            new SessionIdleEvent { AgentId = "child", Data = new() },
+            new AssistantMessageEvent { Data = new() { MessageId = "parent", Content = "parent final" } },
+            new SessionIdleEvent { Data = new() });
+        Assert.Equal("parent final", Assert.IsType<TextContent>(Assert.Single(updates[0].Contents)).Text);
+        Assert.Equal(ChatFinishReason.Stop, updates[1].FinishReason);
     }
 
     [Fact]

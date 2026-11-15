@@ -159,6 +159,7 @@ public sealed partial class CopilotSdkChatClientTests
         public CopilotSubAgentChatClient Receiver { get; } = new();
         public RunningAgentChatLease? Lease { get; private set; }
         public int Releases { get; private set; }
+        public Func<ValueTask>? ReleaseAsync { get; set; }
         public async Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId,
             AgentServices? services, string? displayNameOverride, string? descriptionOverride, string? nameOverride,
             CancellationToken ct)
@@ -173,14 +174,90 @@ public sealed partial class CopilotSdkChatClientTests
             return this.Lease = new(sessionId, chat, () =>
             {
                 this.Releases++;
-                return ValueTask.CompletedTask;
+                return this.ReleaseAsync?.Invoke() ?? ValueTask.CompletedTask;
             });
         }
+
         public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>
             this.Lease is { } lease && lease.SessionId == sessionId ? Task.FromResult(lease) : throw new InvalidOperationException();
         public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition,
             AgentServices? services, string? displayNameOverride, string? descriptionOverride, bool registerAsRunningAgent,
             CancellationToken ct) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_ChildTerminalRetirementPending_DoesNotBlockCanonicalObservationOrRootOutput()
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(new Infrastructure.FakeCopilotClient(session)));
+        var retirementEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishRetirement = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new DeferredLifecycleFactory
+        {
+            ReleaseAsync = () =>
+            {
+                retirementEntered.TrySetResult();
+                return new ValueTask(finishRetirement.Task);
+            },
+        };
+        factory.Continue.TrySetResult();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        client.SetSubAgentDependencies(factory, table);
+        await InvokeEnsureSessionAsync(client);
+        await using var parent = new LifecycleParentTurn(client, session, true);
+        try
+        {
+            await EmitObservedAsync(client, session, LifecycleStart());
+            await RouterBarrierAsync(client, session, parent.Pending!, 0);
+            parent.Next();
+            var terminal = LifecycleFinish();
+            session.Emit(terminal);
+            await retirementEntered.Task;
+            var barriers = (Dictionary<Guid, TaskCompletionSource>)typeof(CopilotSdkChatClient)
+                .GetField("terminalObservationBarriers", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+            Assert.True(barriers.TryGetValue(terminal.Id, out var observed) && observed.Task.IsCompletedSuccessfully,
+                "Canonical terminal observation must settle before fallible child resource retirement.");
+            await RouterBarrierAsync(client, session, parent.Pending!, 2);
+            parent.Next();
+            Assert.False(finishRetirement.Task.IsCompleted);
+        }
+        finally
+        {
+            finishRetirement.TrySetResult();
+        }
+        await using var child = Assert.Single(table.AddedChats);
+    }
+
+    [Fact]
+    public async Task CopilotSdkChatClient_ChildRetirementFailure_FaultsRootInsteadOfBecomingUnobserved()
+    {
+        var session = new Infrastructure.FakeCopilotSession();
+        await using var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new Infrastructure.FakeCopilotClientFactory(new Infrastructure.FakeCopilotClient(session)));
+        var failure = new IOException("synthetic retirement failure");
+        var factory = new DeferredLifecycleFactory { ReleaseAsync = () => ValueTask.FromException(failure) };
+        factory.Continue.TrySetResult();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        client.SetSubAgentDependencies(factory, table);
+        await InvokeEnsureSessionAsync(client);
+        await using var parent = new LifecycleParentTurn(client, session, true);
+        await EmitObservedAsync(client, session, LifecycleStart());
+        await RouterBarrierAsync(client, session, parent.Pending!, 0);
+        parent.Next();
+        await EmitObservedAsync(client, session, LifecycleFinish());
+        try
+        {
+            Assert.Same(failure, await Assert.ThrowsAsync<IOException>(async () =>
+            {
+                while (await parent.Pending!) parent.Next();
+            }));
+        }
+        finally
+        {
+            parent.Pending = null;
+        }
+        await using var child = Assert.Single(table.AddedChats);
     }
 
     public static IEnumerable<object[]> UnknownRetirementCases()

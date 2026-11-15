@@ -60,6 +60,111 @@ public class StreamingPersistenceMiddlewareTests
     }
 
     [Fact]
+    public async Task AcceptedOutput_ConsumerDisposesEarly_IsDurable()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var (middleware, _) = CreateMiddleware(store, [MakeUpdate("accepted partial")]);
+        await using (var output = middleware.GetStreamingResponseAsync([]).GetAsyncEnumerator())
+        {
+            Assert.True(await output.MoveNextAsync());
+            Assert.Empty(store.StoredMessages);
+        }
+        Assert.Equal("accepted partial", GetText(Assert.Single(store.StoredMessages)));
+    }
+
+    [Fact]
+    public async Task PersistenceFailure_IsNotRetriedDuringCleanup()
+    {
+        var store = new SpyAgentPersistenceStore { Failure = new IOException("synthetic append failure") };
+        var (middleware, session) = CreateMiddleware(store, [MakeUpdate("accepted", finishReason: "stop")]);
+        await Assert.ThrowsAsync<IOException>(() => ConsumeAsync(middleware, session));
+        Assert.Equal(1, store.StoreCallCount);
+    }
+
+    [Fact]
+    public async Task AcceptedOutput_LateCleanupRetainsOriginalSessionRunAndOrigin()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var provider = CreateProvider(store);
+        var originalSession = CreateSession(provider);
+        provider.SetCopilotSdkSessionId("original-native");
+        var nextSession = new TestAgentSession();
+        provider.SetAgentSessionId(nextSession, "new-product-session");
+        var originalOrigin = new AgentDocumentOrigin(@"C:\original", true);
+        var middleware = new StreamingPersistenceMiddleware(new StaticChatClient([MakeUpdate("accepted")]), provider, store);
+        middleware.SetCurrentSession(originalSession);
+        middleware.SetAssistantRunId("original-run", originalOrigin);
+        await using (var output = middleware.GetStreamingResponseAsync([]).GetAsyncEnumerator())
+        {
+            Assert.True(await output.MoveNextAsync());
+            middleware.SetCurrentSession(nextSession);
+            provider.SetCopilotSdkSessionId("next-native");
+            middleware.SetAssistantRunId("next-run", new AgentDocumentOrigin(@"C:\next", true));
+        }
+        Assert.Equal(AgentSessionId, Assert.Single(store.StoredAgents).AgentSessionId);
+        Assert.Equal("original-native", store.StoredAgents[0].CopilotSdkSessionId);
+        var message = Assert.Single(store.StoredMessages);
+        Assert.Equal("original-run", message.AdditionalProperties![StreamingPersistenceMiddleware.AssistantRunIdProperty]);
+        Assert.Equal(originalOrigin, AgentDocumentOrigin.Read(message));
+    }
+
+    [Fact]
+    public async Task CommentaryTaskResultAndFinal_PreserveEveryAcceptedContent()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(store,
+        [
+            MakeUpdate("commentary"),
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("task", "task")] },
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("task", "completed")] },
+            MakeUpdate("final", "stop"),
+        ]);
+        await ConsumeAsync(middleware, session);
+        Assert.Equal(["commentary", "final"], store.StoredMessages.SelectMany(message => message.Contents).OfType<TextContent>().Select(content => content.Text));
+        Assert.Single(store.StoredMessages.SelectMany(message => message.Contents).OfType<FunctionCallContent>());
+        Assert.Single(store.StoredMessages.SelectMany(message => message.Contents).OfType<FunctionResultContent>());
+    }
+
+    [Fact]
+    public async Task ProviderFailure_AfterAcceptedTrailingResult_FlushesWithoutMaskingFailure()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var provider = CreateProvider(store);
+        var failure = new IOException("synthetic provider failure");
+        var inner = new StaticChatClient(
+        [
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("call", "task")] },
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("call", "completed")] },
+        ]) { EndFailure = failure };
+        var middleware = new StreamingPersistenceMiddleware(inner, provider, store);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => ConsumeAsync(middleware, session)));
+        Assert.Equal(2, store.StoredMessages.Count);
+        Assert.Equal("call", Assert.Single(store.StoredMessages[1].Contents.OfType<FunctionResultContent>()).CallId);
+        Assert.Equal(2, store.StoreCallCount);
+    }
+
+    [Fact]
+    public async Task ConsecutiveTerminalBatches_DoNotMergeNewTaskIntoAnAlreadyPersistedFinal()
+    {
+        var store = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(store,
+        [
+            MakeUpdate("continued final", "stop"),
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("next", "task")] },
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("next", "completed")] },
+            MakeUpdate("next final", "stop"),
+        ]);
+        await ConsumeAsync(middleware, session);
+        Assert.Equal(4, store.StoredMessages.Count);
+        Assert.Equal("continued final", store.StoredMessages[0].Text);
+        Assert.Equal("next", Assert.Single(store.StoredMessages[1].Contents.OfType<FunctionCallContent>()).CallId);
+        Assert.Equal("next", Assert.Single(store.StoredMessages[2].Contents.OfType<FunctionResultContent>()).CallId);
+        Assert.Equal("next final", store.StoredMessages[3].Text);
+    }
+
+    [Fact]
     public async Task SeparateServiceCallsWithinOneAssistantRun_PersistSameBoundary()
     {
         var store = new SpyAgentPersistenceStore();
@@ -353,9 +458,10 @@ public class StreamingPersistenceMiddlewareTests
 
         // message[0] (FunctionCallContent) is still in the store: CancellationToken.None means
         // StoreAsync cannot be aborted retroactively by the consumer's cancellation token.
-        Assert.Single(spyStore.StoredMessages);
+        Assert.Equal(2, spyStore.StoredMessages.Count);
         Assert.Equal(ChatRole.Assistant, spyStore.StoredMessages[0].Role);
         Assert.Contains(spyStore.StoredMessages[0].Contents, c => c is FunctionCallContent fc && fc.CallId == "c0");
+        Assert.Contains(spyStore.StoredMessages[1].Contents, c => c is FunctionResultContent result && result.CallId == "c0");
     }
 
     [Fact]
@@ -636,6 +742,7 @@ public class StreamingPersistenceMiddlewareTests
         private readonly List<PersistedAgent> storedAgents = [];
 
         public int StoreCallCount { get; private set; }
+        public Exception? Failure { get; init; }
 
         public IReadOnlyList<ChatMessage> StoredMessages => this.storedMessages;
 
@@ -644,6 +751,7 @@ public class StreamingPersistenceMiddlewareTests
         public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
         {
             StoreCallCount++;
+            if (this.Failure is { } failure) throw failure;
             this.storedAgents.Add(request.Agent);
             if (request.NewMessages is not null)
             {
@@ -670,6 +778,7 @@ public class StreamingPersistenceMiddlewareTests
     private sealed class StaticChatClient : IChatClient
     {
         private readonly ChatResponseUpdate[] updates;
+        public Exception? EndFailure { get; init; }
 
         public StaticChatClient(ChatResponseUpdate[] updates) => this.updates = updates;
 
@@ -685,6 +794,7 @@ public class StreamingPersistenceMiddlewareTests
             }
 
             await Task.CompletedTask;
+            if (this.EndFailure is { } failure) throw failure;
         }
 
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)

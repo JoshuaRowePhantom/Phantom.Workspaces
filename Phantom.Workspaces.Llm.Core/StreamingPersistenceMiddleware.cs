@@ -77,7 +77,11 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         // the binding-affecting view-model mutations downstream remain on the foreground context.
         var buffer = new List<ChatResponseUpdate>();
         var persistedCount = 0;
+        var persistenceFailed = false;
         var assistantRunId = this.currentAssistantRunId ?? Guid.NewGuid().ToString("n");
+        var session = this.currentSession;
+        var origin = this.documentOrigin;
+        PersistedAgent? agentSnapshot = null;
 
         var enumerator = this.inner
             .GetStreamingResponseAsync(messages, options, cancellationToken)
@@ -95,6 +99,17 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                         }
 
                         var update = enumerator.Current;
+                        if (agentSnapshot is null && session is not null)
+                        {
+                            // Native identity is established by the first provider read. Freeze
+                            // its owning snapshot before a later run can update provider metadata.
+                            var agent = this.provider.BuildPersistedAgent(session);
+                            agentSnapshot = agent with
+                            {
+                                AgentSessionJson = agent.AgentSessionJson?.DeepClone().AsBsonDocument,
+                                AgentDefinitionJson = agent.AgentDefinitionJson?.DeepClone().AsBsonDocument,
+                            };
+                        }
                         buffer.Add(update);
 
                         // Persist all stable messages (0..stableCount-1) before yielding this
@@ -109,10 +124,15 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
                         for (var i = persistedCount; i < stableCount; i++)
                         {
-                            await this.PersistMessageAsync(response.Messages[i], assistantRunId).ConfigureAwait(false);
+                            await PersistNextAsync(response.Messages[i]).ConfigureAwait(false);
                         }
-
-                        persistedCount = stableCount;
+                        if (update.FinishReason is not null)
+                        {
+                            // A drained autonomous batch can precede a newly sent request in the
+                            // same enumeration. Its durable final must not absorb the next task.
+                            buffer.Clear();
+                            persistedCount = 0;
+                        }
 
                         return (HasUpdate: true, Update: (ChatResponseUpdate?)update);
                     },
@@ -126,23 +146,40 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                 yield return step.Update!;
             }
 
-            // A provider may end normally without a terminal FinishReason. Its final message is
-            // stable once enumeration ends and must be durable along with its matching tool call.
-            if (buffer.Count > 0)
-            {
-                await Task.Run(async () =>
-                {
-                    var finalMessages = buffer.ToChatResponse().Messages;
-                    for (var i = persistedCount; i < finalMessages.Count; i++)
-                    {
-                        await this.PersistMessageAsync(finalMessages[i], assistantRunId).ConfigureAwait(false);
-                    }
-                }, cancellationToken).ConfigureAwait(false);
-            }
         }
         finally
         {
-            await enumerator.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                // Accepted output belongs to the transcript even if the next provider read fails,
+                // cancellation wins, or the consumer stops reading. Never retry a failed write:
+                // its durable outcome may be ambiguous.
+                if (!persistenceFailed && buffer.Count > 0)
+                    await Task.Run(async () =>
+                    {
+                        var finalMessages = buffer.ToChatResponse().Messages;
+                        for (var i = persistedCount; i < finalMessages.Count; i++)
+                            await PersistNextAsync(finalMessages[i]).ConfigureAwait(false);
+                    }, CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                await enumerator.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        async ValueTask PersistNextAsync(ChatMessage message)
+        {
+            try
+            {
+                await this.PersistMessageAsync(message, assistantRunId, agentSnapshot, origin).ConfigureAwait(false);
+                persistedCount++;
+            }
+            catch
+            {
+                persistenceFailed = true;
+                throw;
+            }
         }
     }
 
@@ -169,10 +206,13 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
     internal const string AssistantRunIdProperty = "phantomAssistantRunId";
 
-    private async ValueTask PersistMessageAsync(ChatMessage message, string assistantRunId)
+    private async ValueTask PersistMessageAsync(
+        ChatMessage message,
+        string assistantRunId,
+        PersistedAgent? agentSnapshot,
+        AgentDocumentOrigin? documentOrigin)
     {
-        var session = this.currentSession;
-        if (session is null)
+        if (agentSnapshot is not { } agent)
         {
             return;
         }
@@ -184,9 +224,8 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
         message.AdditionalProperties ??= [];
         message.AdditionalProperties[AssistantRunIdProperty] = assistantRunId;
-        if (this.documentOrigin is { } origin)
+        if (documentOrigin is { } origin)
             message.AdditionalProperties[AgentDocumentOrigin.PropertyName] = origin;
-        var agent = this.provider.BuildPersistedAgent(session);
         await this.store.StoreAsync(
             new StoreRequestAgent
             {

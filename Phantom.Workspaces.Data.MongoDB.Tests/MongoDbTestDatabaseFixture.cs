@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Driver;
+using MongoDB.Bson;
 using Phantom.Workspaces.Containers;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
@@ -24,6 +25,7 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
     private readonly ContainerEngine _containerEngine =
         new WindowsDockerDesktopEngine(NullLogger<DockerCommandRunner>.Instance);
     private readonly MongoDbConnectionBroker _connectionBroker;
+    private IMongoClient? isolatedClient;
 
     public MongoDbTestDatabaseFixture()
     {
@@ -44,6 +46,14 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        var isolatedConnection = Environment.GetEnvironmentVariable("PHANTOM_TEST_MONGODB_CONNECTION_STRING");
+        if (!string.IsNullOrWhiteSpace(isolatedConnection))
+        {
+            this.isolatedClient = new MongoClient(isolatedConnection);
+            Database = this.isolatedClient.GetDatabase("pw_mongodb_test_" + Guid.NewGuid().ToString("N"));
+            await Database.RunCommandAsync<BsonDocument>(new BsonDocument("ping", 1));
+            return;
+        }
         // The broker creates both bind-mount sources before starting the container.
         var client = await _connectionBroker.GetClientAsync(ConnectionDefinition);
         Database = client.GetDatabase(DatabaseName);
@@ -53,6 +63,11 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
+        if (this.isolatedClient is not null)
+        {
+            await this.isolatedClient.DropDatabaseAsync(Database.DatabaseNamespace.DatabaseName);
+            return;
+        }
         // Leave the container running so subsequent runs reuse the warmed-up Atlas Local instance.
         // Only clean up collection state.
         await ResetCollectionAsync();

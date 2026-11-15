@@ -1,6 +1,7 @@
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Tests;
 using MongoDB.Bson;
+using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
 
@@ -32,6 +33,51 @@ public sealed class MongoDbAgentPersistenceStoreContractSlowTests : AgentPersist
         await _fixture.Database.DropCollectionAsync("contract-test-agent-persistence-definitions");
         await _fixture.Database.DropCollectionAsync("contract-test-agent-persistence-messages");
         await _fixture.Database.DropCollectionAsync("contract-test-agent-persistence-sub-agent-manifests");
+    }
+
+    [Fact]
+    public async Task StoreAsync_CompletedChildTaskAndRootFinal_FreshReadRetainsBoth()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var productIdentity = "durable-product-" + Guid.NewGuid().ToString("N");
+        var providerIdentity = "newer-provider-" + Guid.NewGuid().ToString("N");
+        var agent = new PersistedAgent
+        {
+            AgentSessionId = productIdentity,
+            CopilotSdkSessionId = providerIdentity,
+            AgentDefinitionJson = BsonDocument.Parse("""{"kind":"prompt","name":"durable"}"""),
+        };
+        await store.StoreAsync(new()
+        {
+            Agent = agent,
+            NewMessages = [new(ChatRole.Assistant, "older than current provider journal")],
+        });
+        await store.StoreAsync(new()
+        {
+            Agent = agent,
+            NewMessages =
+            [
+                new(ChatRole.Assistant, [new FunctionCallContent("completed-task", "task")]),
+                new(ChatRole.Tool, [new FunctionResultContent("completed-task", "completed result")]),
+                new(ChatRole.Assistant, "durable final"),
+            ],
+        });
+        // A metadata-only/initialization snapshot is not a transcript replacement.
+        await store.StoreAsync(new()
+        {
+            Agent = agent with { AgentSessionJson = new BsonDocument() },
+            NewMessages = [],
+        });
+        var freshStore = new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence");
+        var restored = await freshStore.ReadMessagesAsync(new() { AgentSessionId = productIdentity });
+        Assert.Equal(4, restored.Length);
+        Assert.Equal("older than current provider journal", restored[0].Text);
+        Assert.Equal("completed-task", Assert.Single(restored[1].Contents.OfType<FunctionCallContent>()).CallId);
+        Assert.Equal("completed-task", Assert.Single(restored[2].Contents.OfType<FunctionResultContent>()).CallId);
+        Assert.Equal("durable final", restored[3].Text);
+        Assert.Equal(providerIdentity, (await freshStore.RestoreAsync(new() { AgentSessionId = productIdentity }))!.Value.CopilotSdkSessionId);
+        Assert.Empty(await freshStore.ReadMessagesAsync(new() { AgentSessionId = providerIdentity }));
     }
 
     // Fix #1187: legacy hosted Copilot sub-agent rows have no AgentDefinitionJson (the row

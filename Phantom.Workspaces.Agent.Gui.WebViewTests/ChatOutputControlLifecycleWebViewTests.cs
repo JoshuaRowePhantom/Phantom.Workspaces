@@ -114,6 +114,75 @@ public sealed class ChatOutputControlLifecycleWebViewTests
         });
 
     [Fact]
+    public Task AgentChatOutputControl_CompletedTaskFinalAndNextPrompt_AreDistinctVisibleSiblings()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            await using var chat = await AgentFactory.CreateAgentChatAsync(
+                new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+            using var loggerFactory = new ObservableLoggerFactory();
+            await using var viewModel = new AgentViewModel(chat, "durable-root", "", loggerFactory, TaskScheduler.Default);
+            var control = new AgentChatOutputControl { DataContext = viewModel };
+            var browser = GetBrowser(control);
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            browser.Ready += (_, _) => ready.TrySetResult();
+            var window = CreateOffscreenWindow(control);
+            try
+            {
+                window.Show();
+                await ready.Task;
+                await control.HistoryLoaded;
+                chat.History.Add(new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Contents = [new FunctionCallContent("durable-task", "task", new Dictionary<string, object?> { ["prompt"] = "synthetic task" })],
+                });
+                chat.History.Add(new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Tool,
+                    Contents = [new FunctionResultContent("durable-task", "synthetic completed result")],
+                });
+                chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("durable parent final")] });
+                chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("next durable prompt")] });
+                browser.EndBatch();
+                var result = await EvalAsync(browser, """
+                    (() => {
+                      const final = document.getElementById('history-2');
+                      const prompt = document.getElementById('history-3');
+                      const visible = node => {
+                        if (!node || !node.getClientRects().length) return false;
+                        for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
+                          const style = getComputedStyle(ancestor);
+                          if (ancestor.hidden || style.display === 'none' || style.visibility === 'hidden') return false;
+                          if (ancestor.tagName === 'DETAILS' && !ancestor.open) return false;
+                        }
+                        return true;
+                      };
+                      const ids = [...document.querySelectorAll('[id]')].map(node => node.id);
+                      return {
+                        final: final?.textContent,
+                        prompt: prompt?.textContent,
+                        visible: visible(final) && visible(prompt),
+                        ordered: !!(final?.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING),
+                        unique: new Set(ids).size === ids.length,
+                        result: document.body.textContent.includes('synthetic completed result')
+                      };
+                    })()
+                    """);
+                Assert.Contains("durable parent final", result, StringComparison.Ordinal);
+                Assert.Contains("next durable prompt", result, StringComparison.Ordinal);
+                Assert.Contains("\"visible\":true", result, StringComparison.Ordinal);
+                Assert.Contains("\"ordered\":true", result, StringComparison.Ordinal);
+                Assert.Contains("\"unique\":true", result, StringComparison.Ordinal);
+                Assert.Contains("\"result\":true", result, StringComparison.Ordinal);
+                Assert.Empty(chat.RunningItems);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
     public Task AgentChatOutputControl_RelativeAndFragmentLinks_PreserveBoundOriginAndRawReference()
         => this.fixture.InvokeAsync(async () =>
         {

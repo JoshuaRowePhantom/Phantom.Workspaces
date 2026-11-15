@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text;
 using System.Threading.Channels;
 
 namespace Phantom.Workspaces.Llm;
@@ -134,22 +135,49 @@ public static class CopilotSdkStreamAdapter
         ArgumentNullException.ThrowIfNull(events);
         logger ??= NullLogger.Instance;
         var reportedTypes = new HashSet<Type>();
+        var rootTextByMessage = new Dictionary<string, StringBuilder>(StringComparer.Ordinal);
 
         await foreach (var sessionEvent in events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             switch (sessionEvent)
             {
                 case AssistantMessageDeltaEvent delta when !string.IsNullOrEmpty(delta.Data?.DeltaContent):
+                    if (string.IsNullOrEmpty(delta.AgentId))
+                    {
+                        var messageKey = delta.Data.MessageId ?? string.Empty;
+                        if (!rootTextByMessage.TryGetValue(messageKey, out var streamed))
+                            rootTextByMessage[messageKey] = streamed = new StringBuilder();
+                        streamed.Append(delta.Data.DeltaContent);
+                    }
                     yield return new ChatResponseUpdate
                     {
+                        MessageId = delta.Data.MessageId,
                         Role = ChatRole.Assistant,
                         Contents = [Tag(new TextContent(delta.Data.DeltaContent), delta.AgentId)],
                     };
                     break;
 
+                case AssistantMessageEvent rootFinal when string.IsNullOrEmpty(rootFinal.AgentId)
+                                                         && !string.IsNullOrEmpty(rootFinal.Data?.Content):
+                    var rootMessageKey = rootFinal.Data.MessageId ?? string.Empty;
+                    var coveredText = rootTextByMessage.TryGetValue(rootMessageKey, out var coverage)
+                        ? coverage.ToString() : string.Empty;
+                    if (!rootFinal.Data.Content.StartsWith(coveredText, StringComparison.Ordinal))
+                        throw new InvalidOperationException("Copilot root final text conflicts with accepted streamed message coverage.");
+                    if (coveredText.Length < rootFinal.Data.Content.Length)
+                    {
+                        rootTextByMessage[rootMessageKey] = new StringBuilder(rootFinal.Data.Content);
+                        yield return new ChatResponseUpdate
+                        {
+                            MessageId = rootFinal.Data.MessageId,
+                            Role = ChatRole.Assistant,
+                            Contents = [new TextContent(rootFinal.Data.Content[coveredText.Length..])],
+                        };
+                    }
+                    break;
+
                 // Copilot CLI 1.0.83 emits child output as a final assistant.message event rather
-                // than assistant.message_delta events. Root messages are excluded because their
-                // text has already streamed through the delta path.
+                // than assistant.message_delta events. Child content remains child-owned.
                 case AssistantMessageEvent message when !string.IsNullOrEmpty(message.AgentId)
                                                         && !string.IsNullOrEmpty(message.Data?.Content):
                     var finalContent = Tag(new TextContent(message.Data.Content), message.AgentId);
@@ -305,6 +333,9 @@ public static class CopilotSdkStreamAdapter
                 case SessionErrorEvent error:
                     throw new InvalidOperationException(
                         $"GitHub Copilot session error: {error.Data?.Message}");
+
+                case SessionIdleEvent childIdle when !string.IsNullOrEmpty(childIdle.AgentId):
+                    break;
 
                 case SessionIdleEvent:
                     // Emit a terminal update carrying FinishReason so downstream middleware

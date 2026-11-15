@@ -14,6 +14,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
     public string SessionId { get; set; } = "fake-session-id";
     public Action<Action<SessionEvent>>? OnSubscribe { get; set; }
     public int SendAsyncCallCount { get; private set; }
+    public AssistantMessageEvent? SendAndWaitResult { get; set; }
     public int SubscriberCount
     {
         get
@@ -68,11 +69,10 @@ internal sealed class FakeCopilotSession : ICopilotSession
         return new UnsubscribeToken(this, handler);
     }
 
-    public Task<AssistantMessageEvent?> SendAndWaitAsync(MessageOptions options, TimeSpan? timeout, CancellationToken cancellationToken)
+    public async Task<AssistantMessageEvent?> SendAndWaitAsync(MessageOptions options, TimeSpan? timeout, CancellationToken cancellationToken)
     {
-        // For simplicity, just send and return null. Tests using streaming path don't call this.
-        _ = this.SendAsync(options, cancellationToken);
-        return Task.FromResult<AssistantMessageEvent?>(null);
+        await this.SendAsync(options, cancellationToken);
+        return this.SendAndWaitResult;
     }
 
     public Task SendAsync(MessageOptions options, CancellationToken cancellationToken)
