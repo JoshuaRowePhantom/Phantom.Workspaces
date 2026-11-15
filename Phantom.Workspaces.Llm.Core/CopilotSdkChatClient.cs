@@ -1655,6 +1655,24 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         // invalidated out from under us.
         async Task<StreamingTurnContext> BeginTurnAsync(CancellationToken turnCancellationToken)
         {
+            if (this.copilotSession is not null && this.rootEventQueue is { } existingRoot)
+            {
+                // Fence the old configuration, then drain every accepted batch before replacing it.
+                if (!continuation && this.currentSessionSignature != ComputeSessionSignatureCore(options, this.workingDirectoryOverride))
+                    existingRoot.SealAccepted();
+                if (existingRoot.IsSealed)
+                {
+                    if (admittedBatch is { HasAcceptedOutput: false })
+                    {
+                        admittedBatch.Dispose();
+                        admittedBatch = null;
+                    }
+                    if (admittedBatch is null && existingRoot.HasPending)
+                        admittedBatch = new(existingRoot, existingRoot.Acquire(true, out var acquired), acquired);
+                }
+            }
+            if (admittedBatch?.HasAcceptedOutput != true)
+                cancellationToken.ThrowIfCancellationRequested();
             var session = admittedBatch?.HasAcceptedOutput == true
                 ? this.copilotSession ?? throw new InvalidOperationException("The accepted root batch has no owning native session.")
                 : await this.EnsureSessionAsync(options, turnCancellationToken).ConfigureAwait(false);
@@ -1833,11 +1851,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             return new StreamingTurnContext(
                 channel.Reader,
                 subscription,
-                async sendCancellationToken =>
+                async _ =>
                 {
                     if (continuation || acquiredContinuation) return;
-                    turnCancellationToken.ThrowIfCancellationRequested();
-                    await session.SendAsync(messageOptions!, sendCancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await session.SendAsync(messageOptions!, cancellationToken).ConfigureAwait(false);
                     promptSent = true;
                 },
                 () => outputDrain?.StopRequested == true && rootEvents.HasPending
@@ -2404,7 +2422,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
-        if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature)
+        if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature
+            && this.rootEventQueue?.IsSealed != true)
         {
             return existingSession;
         }
@@ -2412,7 +2431,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         await this.sessionInitializationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (this.copilotSession is { } alreadyInitialized && this.currentSessionSignature == signature)
+            if (this.copilotSession is { } alreadyInitialized && this.currentSessionSignature == signature
+                && this.rootEventQueue?.IsSealed != true)
             {
                 return alreadyInitialized;
             }

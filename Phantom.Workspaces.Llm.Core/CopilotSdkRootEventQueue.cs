@@ -73,6 +73,10 @@ internal sealed class CopilotSdkRootEventQueue
     {
         get { lock (this.gate) return this.pending.Count > 0; }
     }
+    internal bool IsSealed
+    {
+        get { lock (this.gate) return this.sealedForDrain; }
+    }
 
     internal void Accept(SessionEvent value)
     {

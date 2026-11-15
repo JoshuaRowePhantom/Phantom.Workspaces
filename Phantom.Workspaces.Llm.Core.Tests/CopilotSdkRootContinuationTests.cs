@@ -10,6 +10,72 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSdkRootContinuationTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task AgentChat_ConfigChangeAfterAdmission_DrainsAcceptedBatchesAndSendsNewPromptOnce(bool lateAcceptedBatches, bool revertDuringDrain)
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var store = new SerializedStore
+        {
+            BeforeWriteAsync = request =>
+            {
+                if (revertDuringDrain && request.NewMessages?.Any(message => message.Text == "late accepted one") == true)
+                    client.SetWorkingDirectory(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+                return Task.CompletedTask;
+            },
+        };
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        await using var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(), AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ClientOverride = client, ForegroundScheduler = scheduler.ExclusiveScheduler,
+            AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+        });
+        EnqueueTaskFinal(native, "initial", "initial final");
+        var initial = WhenSettled(chat, "initial final");
+        chat.EnqueueUserMessage("initial request");
+        await initial;
+        var initialHistory = chat.History.ToArray();
+        chat.UpdateParameterValues(new Dictionary<string, string> { ["working-directory"] = Path.GetFullPath(".") });
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = false;
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (chat.RunningItems.Count > 0 && !started)
+            {
+                started = true;
+                if (lateAcceptedBatches)
+                {
+                    EmitTaskFinal(native, "late-one", "late accepted one");
+                    EmitTaskFinal(native, "late-two", "late accepted two");
+                }
+            }
+            else if (started && chat.RunningItems.Count == 0) stopped.TrySetResult();
+        };
+        native.Sending = count => { if (count == 2) EmitTaskFinal(native, "new", "new final"); };
+        chat.EnqueueUserMessage("new request");
+        await stopped.Task;
+        Assert.Equal(2, native.SendAsyncCallCount);
+        Assert.Single(native.ResumeSessionCalls);
+        var messages = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+        Assert.Single(messages, message => message.Text == "new final");
+        var calls = messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>().ToArray();
+        Assert.Equal(lateAcceptedBatches ? 4 : 2, calls.Length);
+        Assert.Equal(calls.Length, calls.Select(call => call.CallId).Distinct().Count());
+        Assert.Equal(native.SessionId, (await store.RestoreAsync(new() { AgentSessionId = chat.AgentSessionId }))!.Value.CopilotSdkSessionId);
+        for (var index = 0; index < initialHistory.Length; index++) Assert.Same(initialHistory[index], chat.History[index]);
+        if (lateAcceptedBatches)
+        {
+            Assert.Single(messages, message => message.Text == "late accepted one");
+            Assert.Single(messages, message => message.Text == "late accepted two");
+        }
+        Assert.DoesNotContain(chat.History.SelectMany(item => item.Contents), content => content is ErrorContent);
+    }
+
     [Fact]
     public async Task ParentDispose_SettlesDeferredRequestWithoutSendingItAfterAcceptedContinuation()
     {
