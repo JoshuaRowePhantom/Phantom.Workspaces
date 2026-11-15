@@ -1774,11 +1774,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             return result;
         }
 
-        await Task.Factory.StartNew(
-            () => { lock (this.subAgentItemsLock) this.subAgentItems.Add(childChat); },
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach,
-            this.foregroundScheduler);
+        await this.PublishSubAgentAsync(childChat);
 
         var parentSessionId = this.agentSessionId;
         var childSessionId = childChat.AgentSessionId;
@@ -1832,15 +1828,28 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             }
         }
 
-        _ = Task.Factory.StartNew(
-            () => { lock (this.subAgentItemsLock) this.subAgentItems.Add(subAgent); },
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach,
-            this.foregroundScheduler);
+        _ = this.PublishSubAgentAsync(subAgent);
 
         await this.request.ConfiguredStore.AddSubAgentLinkAsync(this.agentSessionId, agentChat.AgentSessionId);
 
         return subAgent;
+    }
+
+    private async Task PublishSubAgentAsync(IRunningSubAgent subAgent)
+    {
+        try
+        {
+            await Task.Factory.StartNew(
+                () => { lock (this.subAgentItemsLock) this.subAgentItems.Add(subAgent); },
+                CancellationToken.None, TaskCreationOptions.DenyChildAttach,
+                this.foregroundScheduler).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            // Collection membership is already committed by ObservableCollection before it
+            // calls subscribers. Presentation failure must not undo backend registration/linking.
+            this.logger.LogError(error, "Sub-agent presentation publication failed for {AgentId}", subAgent.AgentId);
+        }
     }
 
     public void SetAgentSessionId(string agentSessionId)

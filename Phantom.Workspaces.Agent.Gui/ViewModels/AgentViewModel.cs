@@ -42,8 +42,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
-    private readonly List<RunningAgentChatLease> subAgentLeases = [];
+    private readonly Dictionary<string, RunningAgentChatLease> subAgentLeases = new(StringComparer.Ordinal);
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
+    private readonly ObservableCollection<IRunningSubAgent> viewerSubAgents = [];
     private readonly Dictionary<IRunningSubAgent, IRunningSubAgentDisplay> remoteSubAgentDisplays =
         new(ReferenceEqualityComparer.Instance);
     private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
@@ -59,12 +60,21 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private readonly TaskScheduler foregroundScheduler;
+    private readonly SynchronizationContext? foregroundContext;
     private readonly Func<IAgentChat, string, CancellationToken, Task<IAgentChat>>? remoteChildResolver;
     private readonly CancellationTokenSource remoteChildrenLifetime = new();
     private readonly Dictionary<string, RemoteChildSlot> remoteChildren = new(StringComparer.Ordinal);
     private Task remoteNavigation = Task.CompletedTask;
     private long remoteNavigationGeneration;
     private bool isDisposed;
+    private readonly object childProjectionLock = new();
+    private readonly Queue<NotifyCollectionChangedEventArgs> childChanges = new();
+    private readonly Dictionary<IRunningSubAgent, long> childMembers = new(ReferenceEqualityComparer.Instance);
+    private long childMembershipGeneration;
+    private bool childProjectionInitializing = true;
+    private bool childProjectionScheduled;
+    private bool childProjectionActive;
+    private TaskCompletionSource childProjectionIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object toolProjectionLock = new();
     // Reserve ownership for construction before subscribing. Default is not a serial scheduler.
     private bool toolProjectionOwned = true;
@@ -131,6 +141,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             throw new InvalidOperationException("AgentViewModel must be constructed on its foreground scheduler.");
         }
+        this.foregroundContext = foregroundScheduler is SynchronizationContextTaskScheduler scheduler
+            ? scheduler.SynchronizationContext : SynchronizationContext.Current;
         this.agentSessionId = agentChat.Information.AgentSessionId;
         this.ParentAgentViewModel = parentAgentViewModel;
         this.ParentAgentDisplay = parentAgentViewModel?.agentChat is AgentChat parentLocalChat
@@ -143,7 +155,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.toolsDetail = new AgentChatToolsDetailViewModel();
         this.logsDetail = new AgentChatLogsDetailViewModel(loggerFactory, foregroundScheduler);
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(
-            agentChat.SubAgents, id => this.NavigateToAgent(id));
+            new ReadOnlyObservableCollection<IRunningSubAgent>(this.viewerSubAgents),
+            id => this.NavigateToAgent(id));
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.Modals = new ReadOnlyObservableCollection<AgentSessionModalViewModel>(this.modalSource);
@@ -177,7 +190,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
         }
-        ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
         ((INotifyCollectionChanged)agentChat.Modals).CollectionChanged += this.OnLocalModalsChanged;
 
         // Build the flat detail-content collection (one item per nav node's DetailContent) and the
@@ -259,24 +271,39 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // Seed slots for any sub-agents already present (e.g. restored from persistence).
         // #1451: capture the restore-time sub-agent lease-acquisition continuations so RestoreSettled
         // can span them.
-        this.capturingRestoreContinuations = true;
-        foreach (var subAgent in agentChat.SubAgents)
-        {
-            this.AddSubAgentSlot(subAgent);
-        }
-        this.capturingRestoreContinuations = false;
-
-        this.RefreshModalProjection();
-        this.agentChat.ToolsChanged += this.OnToolsChanged;
         try
         {
+            this.capturingRestoreContinuations = true;
+            IReadOnlyList<IRunningSubAgent> initialChildren;
+            if (agentChat is IAgentChatSubagentsSnapshotProvider snapshotProvider)
+            {
+                initialChildren = [];
+                snapshotProvider.SubscribeAndCaptureSubagents(this.OnSubAgentsCollectionChanged,
+                    children => initialChildren = children);
+            }
+            else
+            {
+                ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
+                initialChildren = agentChat.SubAgents.ToArray();
+            }
+            foreach (var subAgent in initialChildren)
+                this.AddSubAgentSlot(subAgent);
+            this.capturingRestoreContinuations = false;
+            this.RefreshModalProjection();
+            this.agentChat.ToolsChanged += this.OnToolsChanged;
             // Construction already runs on the foreground context. Events during subscription or
             // sampling only mark pending work; they cannot enter this initial transaction.
             this.DrainToolProjection();
+            lock (this.childProjectionLock)
+            {
+                this.childProjectionInitializing = false;
+                this.childProjectionIdle.TrySetResult();
+            }
+            this.ScheduleChildProjection();
         }
         catch
         {
-            this.agentChat.ToolsChanged -= this.OnToolsChanged;
+            _ = this.DisposeRemovedSubAgentViewModelAsync(this);
             throw;
         }
     }
@@ -979,7 +1006,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private async Task DisposeViewResourcesCoreAsync()
     {
-        this.isDisposed = true;
+        Task childProjectionStopped;
+        lock (this.childProjectionLock)
+        {
+            this.isDisposed = true;
+            this.childChanges.Clear();
+            childProjectionStopped = this.childProjectionActive
+                ? this.childProjectionIdle.Task : Task.CompletedTask;
+        }
+        await childProjectionStopped;
         var toolProjectionStopped = this.StopToolProjection();
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         await toolProjectionStopped;
@@ -1004,7 +1039,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.conversationDetail.Dispose();
         this.logsDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
-        ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
+        if (this.agentChat is IAgentChatSubagentsSnapshotProvider snapshotProvider)
+            snapshotProvider.UnsubscribeSubagents(this.OnSubAgentsCollectionChanged);
+        else
+            ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
         ((INotifyCollectionChanged)this.agentChat.Modals).CollectionChanged -= this.OnLocalModalsChanged;
         this.agentChat.InformationChanged -= this.OnInformationChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;
@@ -1037,7 +1075,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
 
         // Dispose sub-agent leases
-        foreach (var lease in this.subAgentLeases)
+        foreach (var lease in this.subAgentLeases.Values)
         {
             await lease.DisposeAsync();
         }
@@ -1069,10 +1107,112 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void OnSubAgentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        // Reset carries no membership. Capture it while the publisher still owns its collection,
+        // not later on the viewer scheduler after another mutation.
+        var snapshot = e.Action == NotifyCollectionChangedAction.Reset
+            ? new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset)
+            : e;
+        lock (this.childProjectionLock)
+        {
+            if (this.isDisposed) return;
+            if (e.Action == NotifyCollectionChangedAction.Reset)
+            {
+                this.childChanges.Enqueue(snapshot);
+                var members = this.agentChat.SubAgents.ToArray();
+                if (members.Length != 0)
+                    this.childChanges.Enqueue(new(NotifyCollectionChangedAction.Add, members));
+            }
+            else
+            {
+                // Event args may wrap mutable IList instances owned by the publisher.
+                var oldItems = e.OldItems?.Cast<IRunningSubAgent>().ToArray();
+                var newItems = e.NewItems?.Cast<IRunningSubAgent>().ToArray();
+                snapshot = e.Action switch
+                {
+                    NotifyCollectionChangedAction.Add => new(e.Action, newItems!),
+                    NotifyCollectionChangedAction.Remove => new(e.Action, oldItems!),
+                    NotifyCollectionChangedAction.Replace => new(e.Action, newItems!, oldItems!),
+                    _ => new(NotifyCollectionChangedAction.Move, newItems!, e.NewStartingIndex, e.OldStartingIndex),
+                };
+                this.childChanges.Enqueue(snapshot);
+            }
+        }
+        this.ScheduleChildProjection();
+    }
+
+    private void ScheduleChildProjection()
+    {
+        lock (this.childProjectionLock)
+        {
+            if (this.isDisposed || this.childProjectionInitializing
+                || this.childProjectionScheduled || this.childChanges.Count == 0) return;
+            this.childProjectionScheduled = true;
+            this.childProjectionIdle = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        // Default explicitly opts out of foreground affinity (headless consumers/tests).
+        if (this.foregroundScheduler == TaskScheduler.Default || TaskScheduler.Current == this.foregroundScheduler
+            || this.foregroundContext is not null && SynchronizationContext.Current == this.foregroundContext)
+        {
+            this.DrainChildProjection();
+            return;
+        }
+        var task = Task.Factory.StartNew(this.DrainChildProjection, CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, this.foregroundScheduler);
+        _ = task.ContinueWith(
+            failed => this.logger.LogError(failed.Exception, "Foreground child projection failed."),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private void DrainChildProjection()
+    {
+        try
+        {
+            while (true)
+            {
+                NotifyCollectionChangedEventArgs change;
+                lock (this.childProjectionLock)
+                {
+                    if (this.isDisposed || this.childChanges.Count == 0)
+                    {
+                        this.childProjectionActive = false;
+                        this.childProjectionScheduled = false;
+                        this.childProjectionIdle.TrySetResult();
+                        return;
+                    }
+                    this.childProjectionActive = true;
+                    change = this.childChanges.Dequeue();
+                }
+                this.ApplySubAgentChange(change);
+            }
+        }
+        catch
+        {
+            lock (this.childProjectionLock)
+            {
+                this.childProjectionActive = false;
+                this.childProjectionScheduled = false;
+                this.childChanges.Clear();
+                this.childProjectionIdle.TrySetResult();
+            }
+            throw;
+        }
+    }
+
+    internal Task ChildProjectionIdle
+    {
+        get { lock (this.childProjectionLock) return this.childProjectionIdle.Task; }
+    }
+
+    private void ApplySubAgentChange(NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action == NotifyCollectionChangedAction.Move) return; // Slots use activity ordering.
         var selectedId = e.Action == NotifyCollectionChangedAction.Replace
             ? this.RootView().SelectedEditorItem?.Id : null;
-        if (e.Action == NotifyCollectionChangedAction.Reset && this.agentChat is RemoteAgentChat)
+        if (e.Action == NotifyCollectionChangedAction.Reset)
         {
+            this.childMembers.Clear();
+            this.viewerSubAgents.Clear();
             foreach (var child in this.remoteChildren.Values.ToArray())
                 this.RemoveRemoteChild(child.Reference.AgentId);
             foreach (var display in this.remoteSubAgentDisplays.Values)
@@ -1081,8 +1221,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 if (display is IDisposable disposable) disposable.Dispose();
             }
             this.remoteSubAgentDisplays.Clear();
-            foreach (var subAgent in this.agentChat.SubAgents)
-                this.AddSubAgentSlot(subAgent);
+            foreach (var child in this.subAgentViewModels.ToArray())
+                _ = this.RemoveSubAgentDetailContents(child.AgentChat.Information.AgentId);
             return;
         }
 
@@ -1090,6 +1230,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             foreach (IRunningSubAgent subAgent in e.OldItems)
             {
+                this.childMembers.Remove(subAgent);
+                this.viewerSubAgents.Remove(subAgent);
                 this.RemoveRemoteChild(subAgent.AgentId);
                 if (this.remoteSubAgentDisplays.Remove(subAgent, out var display))
                 {
@@ -1127,6 +1269,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
+        if (!this.childMembers.TryAdd(subAgent, ++this.childMembershipGeneration)) return;
+        this.viewerSubAgents.Add(subAgent);
         if (this.agentChat is RemoteAgentChat)
         {
             var display = new RemoteRunningSubAgentDisplay(subAgent);
@@ -1169,51 +1313,63 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.logger.LogWarning("Unknown IRunningSubAgent type: {Type}", subAgent.GetType().Name);
     }
 
-    private void AddSubAgentSlotEager(IRunningSubAgent subAgent, AgentChat subAgentChat)
+    private bool AddSubAgentSlotEager(IRunningSubAgent subAgent, AgentChat subAgentChat)
     {
-        var display = new RunningSubAgentDisplay(subAgentChat);
-        this.subAgentDisplayItems.Add(display);
-        var childMemory = subAgentChat.SessionLoggerFactory is ISessionScopedLoggerFactory scoped
-            && scoped.SessionMemoryFactory is ObservableLoggerFactory scopedMemory
-            ? scopedMemory
-            : new ObservableLoggerFactory();
-        var subAgentViewModel = new AgentViewModel(new AgentViewModelOptions
+        AgentViewModel? subAgentViewModel = null;
+        RunningSubAgentDisplay? display = null;
+        try
         {
-            AgentChat = subAgentChat,
-            DisplayName = subAgent.DisplayName,
-            Description = subAgent.Description,
-            LoggerFactory = childMemory,
-            ForegroundScheduler = this.foregroundScheduler,
-            ParentAgentViewModel = this,
-            RemoteChildResolver = this.remoteChildResolver,
-        });
-        // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
-        // (issue #1046): the parent can resolve its own children, and if the target is above this
-        // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
-        subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
-        subAgentViewModel.OpenDocumentLinkHandler = this.OpenDocumentLinkHandler;
-        subAgentViewModel.OpenUrlHandler = this.OpenUrlHandler;
-        this.subAgentViewModels.Add(subAgentViewModel);
-        PropertyChangedEventHandler modalHandler = (_, e) =>
-        {
-            if (e.PropertyName == nameof(HasModalsNeedingInput))
+            var childMemory = subAgentChat.SessionLoggerFactory is ISessionScopedLoggerFactory scoped
+                && scoped.SessionMemoryFactory is ObservableLoggerFactory scopedMemory
+                ? scopedMemory
+                : new ObservableLoggerFactory();
+            subAgentViewModel = new AgentViewModel(new AgentViewModelOptions
             {
-                this.RaisePropertyChanged(nameof(this.HasModalsNeedingInput));
+                AgentChat = subAgentChat,
+                DisplayName = subAgent.DisplayName,
+                Description = subAgent.Description,
+                LoggerFactory = childMemory,
+                ForegroundScheduler = this.foregroundScheduler,
+                ParentAgentViewModel = this,
+                RemoteChildResolver = this.remoteChildResolver,
+            });
+            display = new RunningSubAgentDisplay(subAgentChat);
+            subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
+            subAgentViewModel.OpenDocumentLinkHandler = this.OpenDocumentLinkHandler;
+            subAgentViewModel.OpenUrlHandler = this.OpenUrlHandler;
+            this.subAgentViewModels.Add(subAgentViewModel);
+            PropertyChangedEventHandler modalHandler = (_, e) =>
+            {
+                if (e.PropertyName == nameof(HasModalsNeedingInput))
+                    this.RaisePropertyChanged(nameof(this.HasModalsNeedingInput));
+            };
+            subAgentViewModel.PropertyChanged += modalHandler;
+            this.subAgentModalSubscriptions[subAgentViewModel] = modalHandler;
+            this.AppendSubAgentDetailContents(subAgentViewModel);
+            // Stubs may use the session ID; navigation/slots use the materialized chat's ID.
+            this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
+            this.subAgentDisplayItems.Add(display);
+            this.RefreshModalProjection();
+            var root = this.RootView();
+            if (root.SelectedEditorItem?.Id == $"sub-agent-{subAgent.AgentId}")
+                root.NavigateToAgent(subAgentChat.AgentId);
+            return true;
+        }
+        catch (Exception error)
+        {
+            if (display is not null)
+            {
+                this.subAgentDisplayItems.Remove(display);
+                display.Dispose();
             }
-        };
-        subAgentViewModel.PropertyChanged += modalHandler;
-        this.subAgentModalSubscriptions[subAgentViewModel] = modalHandler;
-        // Recursively aggregate the sub-agent's flat detail-content collection into this agent's
-        // collection so every sub-agent node (and its descendants) has a first-class cached document
-        // in the root dock (issue #1035). The sub-agent's collection already includes its own
-        // sub-agents, so arbitrary nesting depth is handled without special-casing.
-        this.AppendSubAgentDetailContents(subAgentViewModel);
-        // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
-        this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
-        this.RefreshModalProjection();
-        var root = this.RootView();
-        if (root.SelectedEditorItem?.Id == $"sub-agent-{subAgent.AgentId}")
-            root.NavigateToAgent(subAgentChat.AgentId);
+            if (subAgentViewModel is not null)
+            {
+                _ = this.RemoveSubAgentDetailContents(subAgentChat.AgentId);
+                _ = this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
+            }
+            this.logger.LogError(error, "Failed to add sub-agent slot {AgentId}", subAgent.AgentId);
+            return false;
+        }
     }
 
     private void AppendSubAgentDetailContents(AgentViewModel subAgentViewModel)
@@ -1263,6 +1419,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             return Task.CompletedTask;
         }
+        var root = this.RootView();
+        if (root.SelectedEditorItem?.Id == $"sub-agent-{agentId}")
+            root.SelectedEditorItem = root.subAgentsNavItem;
 
         if (this.subAgentDetailSubscriptions.TryGetValue(subAgentViewModel, out var handler))
         {
@@ -1290,7 +1449,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 disposable.Dispose();
         }
         this.RefreshModalProjection();
-        return this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
+        this.subAgentLeases.Remove(agentId, out var lease);
+        return this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel, lease);
     }
 
     private async Task DisposeRemoteChildAsync(RemoteChildSlot child, Task removal)
@@ -1465,11 +1625,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         public EventHandler? StatusHandler { get; set; }
     }
 
-    private async Task DisposeRemovedSubAgentViewModelAsync(AgentViewModel subAgentViewModel)
+    private async Task DisposeRemovedSubAgentViewModelAsync(
+        AgentViewModel subAgentViewModel, RunningAgentChatLease? lease = null)
     {
         try
         {
-            await subAgentViewModel.DisposeViewResourcesAsync().ConfigureAwait(false);
+            try { await subAgentViewModel.DisposeViewResourcesAsync().ConfigureAwait(false); }
+            finally { if (lease is not null) await lease.DisposeAsync().ConfigureAwait(false); }
         }
         catch (Exception exception)
         {
@@ -1482,6 +1644,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlotLazy(SubAgent stub)
     {
+        var membershipGeneration = this.childMembers[stub];
         // #1122: The continuation body performs UI-affine mutations (allDetailContents,
         // subAgentDisplayItems, Dock updates via AgentDetailDockFactory) and MUST run on the
         // UI-thread foregroundScheduler. The scheduler is now a required constructor
@@ -1496,17 +1659,23 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 if (task.IsCompletedSuccessfully)
                 {
                     var lease = await task;
-                    // Hold the lease for the lifetime of the slot
-                    lock (this.subAgentLeases)
+                    if (this.isDisposed || !this.childMembers.TryGetValue(stub, out var currentGeneration)
+                        || currentGeneration != membershipGeneration)
                     {
-                        this.subAgentLeases.Add(lease);
+                        await lease.DisposeAsync();
+                        return;
                     }
                     try
                     {
-                        this.AddSubAgentSlotEager(stub, lease.LocalAgentChat);
+                        if (this.AddSubAgentSlotEager(stub, lease.LocalAgentChat))
+                        {
+                            this.subAgentLeases.Add(lease.LocalAgentChat.AgentId, lease);
+                        }
+                        else await lease.DisposeAsync();
                     }
                     catch (Exception ex)
                     {
+                        await lease.DisposeAsync();
                         this.logger.LogError(ex, "Failed to add restored sub-agent slot {AgentId}", stub.SessionId.Value);
                     }
                 }
@@ -1518,6 +1687,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             CancellationToken.None,
             TaskContinuationOptions.None,
             this.foregroundScheduler).Unwrap();
+        _ = acquisitionContinuation.ContinueWith(
+            failed => this.logger.LogError(failed.Exception, "Failed to settle restored sub-agent slot {AgentId}", stub.SessionId.Value),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
         // #1451: while the constructor seeds restored sub-agents, record each acquisition
         // continuation so RestoreSettled awaits the UI-affine running-state mutations they perform.

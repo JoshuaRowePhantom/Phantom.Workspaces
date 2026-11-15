@@ -18,6 +18,326 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentViewModelTests
 {
+    [Fact]
+    public async Task AddSubAgentSlotLazy_RemovedAndReadmittedBeforeDispatch_RejectsOldAcquisitionGeneration()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var stub = CreateLazySubAgent(child.AgentSessionId, new BackgroundLeaseFakeFactory(child, false));
+        var source = GetSubAgentItems(chat);
+        source.Add(stub);
+        source.Remove(stub);
+        source.Add(stub);
+        viewer.Drain();
+
+        Assert.Single(vm.SubAgentsContainer.Slots);
+        Assert.Single(vm.SubAgentDisplays);
+        Assert.DoesNotContain(logs.Entries, entry => entry.Contains("[ERR]", StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Fact]
+    public async Task OnSubAgentsCollectionChanged_ResetThenAddAndMove_UsesCapturedMembershipWithoutDuplicates()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var first = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var second = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var source = GetSubAgentItems(chat);
+        source.Add(first);
+        source.Clear();
+        source.Add(second);
+        source.Add(first);
+        source.Move(1, 0);
+        viewer.Drain();
+
+        Assert.Equal(2, vm.SubAgentsContainer.Slots.Count);
+        Assert.Equal(2, vm.SubAgentDisplays.Count);
+        Assert.Equal(new[] { first.AgentId, second.AgentId }.Order(),
+            vm.SubAgentsContainer.Slots.Select(slot => slot.AgentId).Order());
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AgentChat_SubAgentPublicationSubscriberThrows_ObservesFailureAndPreservesRegistration(bool manual)
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        using var logs = new ObservableLoggerFactory();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        logs.EntryAdded += (_, entry) =>
+        {
+            if (entry.Contains("Sub-agent presentation publication failed", StringComparison.Ordinal))
+                reported.TrySetResult();
+        };
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = CreateAgentDefinition(),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            AgentServices = new AgentServices { LoggerFactory = logs },
+        });
+        await using var child = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = CreateAgentDefinition(),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+        });
+        NotifyCollectionChangedEventHandler handler = (_, e) =>
+        {
+            if (e.Action == NotifyCollectionChangedAction.Add)
+                throw new InvalidOperationException("subscriber failed");
+        };
+        var notifications = (INotifyCollectionChanged)parent.SubAgents;
+        notifications.CollectionChanged += handler;
+        try
+        {
+            if (manual)
+            {
+                var registered = await ((ISubAgentTable)parent).Add(child);
+                Assert.Same(child, registered.AgentChat);
+                await Assert.ThrowsAsync<InvalidOperationException>(() => ((ISubAgentTable)parent).Add(child));
+            }
+            else
+            {
+                var registered = await parent.GetOrCreateAsync("child", CreateAgentDefinition(), "call", TestContext.Current.CancellationToken);
+                Assert.Same(registered, await parent.GetOrCreateAsync("child", CreateAgentDefinition(), "call", TestContext.Current.CancellationToken));
+            }
+            await reported.Task.WaitAsync(TestContext.Current.CancellationToken);
+            var published = Assert.Single(parent.SubAgents);
+            Assert.Equal(published is SubAgent sub ? sub.SessionId.Value : ((AgentChat)published).AgentSessionId,
+                Assert.Single(await store.ReadSubAgentChildIdsAsync(parent.AgentSessionId, TestContext.Current.CancellationToken)).Value);
+            Assert.Contains(logs.Entries, entry => entry.Contains("subscriber failed", StringComparison.Ordinal));
+        }
+        finally { notifications.CollectionChanged -= handler; }
+    }
+
+    [Fact]
+    public async Task AddSubAgentSlotEager_ChildConstructionFails_LeavesNoPartialDisplayOrDocument()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var childLogs = new Moq.Mock<ISessionScopedLoggerFactory>();
+        childLogs.Setup(factory => factory.CreateLogger(Moq.It.IsAny<string>()))
+            .Returns(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        var failure = new InvalidOperationException("child log resources unavailable");
+        childLogs.SetupGet(factory => factory.SessionMemoryFactory).Throws(failure);
+        await using var child = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = CreateAgentDefinition(),
+            AgentServices = new AgentServices { LoggerFactory = childLogs.Object },
+        });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var baseline = vm.AllDetailContents.ToArray();
+        GetSubAgentItems(chat).Add(child);
+        viewer.Drain();
+
+        Assert.Empty(vm.SubAgentDisplays);
+        Assert.Empty(vm.SubAgentsContainer.Slots);
+        Assert.Equal(baseline, vm.AllDetailContents);
+        Assert.Contains(logs.Entries, entry => entry.Contains(failure.Message, StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [AvaloniaFact]
+    public async Task OnSubAgentsCollectionChanged_DistinctEngineContext_ConstructsChildOnViewerContext()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var foreground = SynchronizationContextTaskScheduler.FromCurrent();
+        var vm = new AgentViewModel(chat, "parent", "", logs, foreground);
+        var contexts = new List<SynchronizationContext?>();
+        ((INotifyCollectionChanged)vm.AllDetailContents).CollectionChanged +=
+            (_, _) => contexts.Add(SynchronizationContext.Current);
+        await Task.Run(() =>
+        {
+            var previous = SynchronizationContext.Current;
+            SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+            try { GetSubAgentItems(chat).Add(child); }
+            finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        }, TestContext.Current.CancellationToken);
+        await vm.ChildProjectionIdle;
+
+        Assert.NotEmpty(contexts);
+        Assert.All(contexts, context => Assert.Same(foreground.SynchronizationContext, context));
+        Assert.Same(child, Assert.Single(vm.SubAgentsContainer.Slots).SubAgentViewModel!.AgentChat);
+        Assert.DoesNotContain(logs.Entries, entry => entry.Contains("must be constructed", StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AddSubAgentSlotLazy_RemovedOrDisposedBeforeLeaseCompletes_ReleasesWithoutPublishing(bool dispose)
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var factory = new ManualBackgroundLeaseFactory(child);
+        var stub = CreateLazySubAgent(child.AgentSessionId, factory);
+        GetSubAgentItems(chat).Add(stub);
+        viewer.Drain();
+        if (dispose) await vm.DisposeViewResourcesAsync();
+        else GetSubAgentItems(chat).Remove(stub);
+        factory.CompleteLease();
+        await factory.Released.Task;
+
+        Assert.Empty(vm.SubAgentDisplays);
+        Assert.Empty(vm.SubAgentsContainer.Slots);
+        Assert.Equal(1, factory.ReleaseCount);
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Fact]
+    public async Task OnSubAgentsCollectionChanged_ReplaceSelectedChild_PreservesSelectionAndIdentity()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var oldChild = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        child.SetAgentSessionId(oldChild.AgentSessionId);
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        GetSubAgentItems(chat).Add(oldChild);
+        viewer.Drain();
+        vm.NavigateToAgent(oldChild.AgentId);
+        GetSubAgentItems(chat)[0] = child;
+
+        Assert.Same(child, Assert.Single(vm.SubAgentsContainer.Slots).SubAgentViewModel!.AgentChat);
+        Assert.Equal($"sub-agent-{child.AgentId}", vm.SelectedEditorItem!.Id);
+        Assert.Single(vm.SubAgentDisplays);
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Fact]
+    public async Task OnSubAgentsCollectionChanged_EagerChildRaisedOnEngineScheduler_MarshalsToViewerForeground()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var offScheduler = new List<string>();
+        ((INotifyCollectionChanged)vm.SubAgentDisplays).CollectionChanged += (_, _) =>
+        {
+            if (!viewer.IsExecutingTask) offScheduler.Add("display");
+        };
+        ((INotifyCollectionChanged)vm.AllDetailContents).CollectionChanged += (_, _) =>
+        {
+            if (!viewer.IsExecutingTask) offScheduler.Add("document");
+        };
+        await Task.Run(() => GetSubAgentItems(chat).Add(child), TestContext.Current.CancellationToken);
+        viewer.Drain();
+
+        Assert.Empty(offScheduler);
+        Assert.Same(child, Assert.Single(vm.SubAgentsContainer.Slots).SubAgentViewModel!.AgentChat);
+        Assert.Single(vm.SubAgentDisplays);
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnSubAgentsCollectionChanged_RemoveBeforeQueuedAdd_DoesNotResurrectChild(bool reset)
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var baseline = vm.AllDetailContents.ToArray();
+        GetSubAgentItems(chat).Add(child);
+        if (reset) GetSubAgentItems(chat).Clear();
+        else GetSubAgentItems(chat).Remove(child);
+        viewer.Drain();
+
+        Assert.Empty(vm.SubAgentDisplays);
+        Assert.Empty(vm.SubAgentsContainer.Slots);
+        Assert.Equal(baseline, vm.AllDetailContents);
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [Fact]
+    public async Task OnSubAgentsCollectionChanged_ViewerDisposedBeforeDispatch_DoesNotMutateCollections()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        GetSubAgentItems(chat).Add(child);
+        await vm.DisposeViewResourcesAsync();
+        var mutations = 0;
+        ((INotifyCollectionChanged)vm.AllDetailContents).CollectionChanged += (_, _) => mutations++;
+        ((INotifyCollectionChanged)vm.SubAgentDisplays).CollectionChanged += (_, _) => mutations++;
+        viewer.Drain();
+
+        Assert.Equal(0, mutations);
+        Assert.Empty(vm.SubAgentDisplays);
+        Assert.Empty(vm.SubAgentsContainer.Slots);
+    }
+
+    [Fact]
+    public async Task AddSubAgentSlotEager_PublicationFails_RollsBackDisplayAndDocuments()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var baseline = vm.AllDetailContents.ToArray();
+        var failure = new InvalidOperationException("child document publication failed");
+        var injected = false;
+        ((INotifyCollectionChanged)vm.AllDetailContents).CollectionChanged += (_, e) =>
+        {
+            if (e.Action == NotifyCollectionChangedAction.Add && !injected)
+            {
+                injected = true;
+                throw failure;
+            }
+        };
+        GetSubAgentItems(chat).Add(child);
+        viewer.Drain();
+
+        Assert.True(injected);
+        Assert.Empty(vm.SubAgentDisplays);
+        Assert.Empty(vm.SubAgentsContainer.Slots);
+        Assert.Equal(baseline, vm.AllDetailContents);
+        Assert.Contains(logs.Entries, entry => entry.Contains(failure.Message, StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
     // Issue #1084: the running-item CollectionChanged event is raised synchronously on the
     // background process-loop thread (including during AgentChat.DisposeAsync draining). The
     // handler must not read UI-affine collections off-thread; it must marshal the resulting
@@ -115,11 +435,8 @@ public sealed class AgentViewModelTests
         await Task.Run(() => factory.CompleteLease(), TestContext.Current.CancellationToken);
         await queuedSignal;
 
-        // Drain everything scheduled onto the foreground scheduler.
-        for (int i = 0; i < 10; i++)
-        {
-            scheduler.Drain();
-        }
+        scheduler.Drain();
+        await viewModel.ChildProjectionIdle;
 
         Assert.Contains(viewModel.SubAgentsContainer.Slots, s => s.AgentId == subAgentChat.AgentId);
         Assert.Empty(mutationsOffScheduler);
@@ -138,27 +455,17 @@ public sealed class AgentViewModelTests
         var scheduler = new SchedulerRecordingCapturingTaskScheduler();
         await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, scheduler);
 
-        // Inject a lazy sub-agent whose lease acquisition throws — this exercises the faulted
-        // branch (logs, does not throw). We then also verify the success branch is protected
-        // by triggering a lease acquisition that succeeds but whose AgentChat is disposed so
-        // AddSubAgentSlotEager throws when accessing it.
+        // Faulted acquisition is observed directly through the session logger. Eager construction
+        // and publication failures have separate regressions above; no finalizer timing is involved.
         AddLazySubAgentThatFaults(chat);
 
-        for (int i = 0; i < 10; i++)
-        {
-            scheduler.Drain();
-        }
-
-        // Force any unobserved-task exceptions in the current context to surface deterministically.
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
+        scheduler.Drain();
+        await viewModel.ChildProjectionIdle;
 
         // No slot should have been added.
         Assert.Empty(viewModel.SubAgentsContainer.Slots);
-        // The test passes if we reached here without an unobserved-task exception tearing the
-        // process down. The faulted branch has always logged; the success-branch try/catch
-        // added for #1122 protects the equivalent AppendSubAgentDetailContents crash path.
+        Assert.Contains(loggerFactory.Entries, entry =>
+            entry.Contains("Failed to acquire lease for restored sub-agent", StringComparison.Ordinal));
     }
 
     // Issue #1122: Restored sub-agent detail contents must appear in the parent's
@@ -180,10 +487,8 @@ public sealed class AgentViewModelTests
 
         AddLazySubAgent(chat, subAgentChat, backgroundLease: false);
 
-        for (int i = 0; i < 10; i++)
-        {
-            scheduler.Drain();
-        }
+        scheduler.Drain();
+        await viewModel.ChildProjectionIdle;
 
         Assert.True(viewModel.AllDetailContents.Count > parentBaselineCount,
             "Restored sub-agent should have appended its own detail contents.");
@@ -344,6 +649,8 @@ public sealed class AgentViewModelTests
         // executing on the foreground scheduler (or the caller can approximate by awaiting
         // scheduler.WhenNextTaskQueued() before draining).
         public TaskCompletionSource ContinuationQueued { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Released { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int ReleaseCount { get; private set; }
 
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
@@ -355,7 +662,12 @@ public sealed class AgentViewModelTests
             var lease = new RunningAgentChatLease(
                 new AgentSessionId(this.agentChat.AgentSessionId),
                 this.agentChat,
-                () => ValueTask.CompletedTask,
+                () =>
+                {
+                    this.ReleaseCount++;
+                    this.Released.TrySetResult();
+                    return ValueTask.CompletedTask;
+                },
                 localAgentChat: this.agentChat);
             this.leaseTcs.SetResult(lease);
             this.ContinuationQueued.TrySetResult();

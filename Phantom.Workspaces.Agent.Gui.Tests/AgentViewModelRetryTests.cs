@@ -268,6 +268,7 @@ public sealed class AgentViewModelRetryTests
         await using var childChat = CreateChat(MakeDefinition());
         await using var root = this.CreateViewModel(rootChat, loggerFactory);
         await ((ISubAgentTable)rootChat).Add(childChat);
+        await root.ChildProjectionIdle;
         var modal = new AgentChatModal
         {
             Id = "child-modal",
