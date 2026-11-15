@@ -308,8 +308,11 @@ public sealed class CopilotSdkRootContinuationTests
         Assert.Empty(queues.ImmediateQueue.Items);
     }
 
-    [Fact]
-    public async Task AgentChat_FinalReplacement_ReconcilesAlreadyPersistedAndPromotedMessageInPlace()
+    [Theory]
+    [InlineData("replace-me")]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task AgentChat_FinalReplacement_ReconcilesAlreadyPersistedAndPromotedMessageInPlace(string? nativeMessageId)
     {
         var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
         var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
@@ -329,7 +332,7 @@ public sealed class CopilotSdkRootContinuationTests
             if (chat.History.Any(item => item.Contents.OfType<TextContent>().Any(content => content.Text == "draft")))
                 promoted.TrySetResult();
         };
-        native.EnqueueEvent(new AssistantMessageDeltaEvent { Data = new() { MessageId = "replace-me", DeltaContent = "draft" } });
+        native.EnqueueEvent(new AssistantMessageDeltaEvent { Data = new() { MessageId = nativeMessageId!, DeltaContent = "draft" } });
         native.EnqueueEvent(new ToolExecutionStartEvent { Data = new() { ToolCallId = "read", ToolName = "read" } });
         native.EnqueueEvent(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "read", Success = true, Result = new() { Content = "read result" } } });
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -341,18 +344,21 @@ public sealed class CopilotSdkRootContinuationTests
         };
         chat.EnqueueUserMessage("request");
         await promoted.Task;
-        var livePrefix = Assert.Single(chat.History, item => item.MessageId == "replace-me");
-        var prefix = Assert.Single(await store.ReadMessagesAsync(new() { AgentSessionId = product }), message => message.MessageId == "replace-me");
-        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "replace-me", Content = "full replacement" } });
-        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "replace-me", Content = "full replacement" } });
+        var livePrefix = Assert.Single(chat.History, item => item.Contents.OfType<TextContent>().Any(content => content.Text == "draft"));
+        var prefix = Assert.Single(await store.ReadMessagesAsync(new() { AgentSessionId = product }), message => message.Text == "draft");
+        Assert.False(string.IsNullOrEmpty(prefix.MessageId));
+        Assert.Equal(livePrefix.MessageId, prefix.MessageId);
+        if (!string.IsNullOrEmpty(nativeMessageId)) Assert.Equal(nativeMessageId, prefix.MessageId);
+        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = nativeMessageId!, Content = "full replacement" } });
+        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = nativeMessageId!, Content = "full replacement" } });
         native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "other", Content = "distinct final" } });
         native.Emit(new SessionIdleEvent { Data = new() });
         await completed.Task;
         var messages = await store.ReadMessagesAsync(new() { AgentSessionId = product });
-        var replacement = Assert.Single(messages, message => message.MessageId == "replace-me");
+        var replacement = Assert.Single(messages, message => message.MessageId == prefix.MessageId);
         Assert.Equal("full replacement", replacement.Text);
         Assert.Equal(prefix.CreatedAt, replacement.CreatedAt);
-        var liveReplacement = Assert.Single(chat.History, item => item.MessageId == "replace-me");
+        var liveReplacement = Assert.Single(chat.History, item => item.MessageId == prefix.MessageId);
         Assert.Equal(livePrefix.Timestamp, liveReplacement.Timestamp);
         Assert.Equal(livePrefix.AssistantRunId, liveReplacement.AssistantRunId);
         Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "full replacement");

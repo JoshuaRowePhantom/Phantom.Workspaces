@@ -136,22 +136,28 @@ public static class CopilotSdkStreamAdapter
         logger ??= NullLogger.Instance;
         var reportedTypes = new HashSet<Type>();
         var rootTextByMessage = new Dictionary<string, StringBuilder>(StringComparer.Ordinal);
+        // Anonymous frames need their batch-local identity before a durable prefix is written.
+        string? anonymousRootMessageId = null;
+        string RootMessageId(string? nativeId) => string.IsNullOrEmpty(nativeId)
+            ? anonymousRootMessageId ??= "phantom-copilot-root-" + Guid.NewGuid().ToString("n")
+            : nativeId;
 
         await foreach (var sessionEvent in events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
             switch (sessionEvent)
             {
                 case AssistantMessageDeltaEvent delta when !string.IsNullOrEmpty(delta.Data?.DeltaContent):
+                    var deltaMessageId = delta.Data.MessageId;
                     if (string.IsNullOrEmpty(delta.AgentId))
                     {
-                        var messageKey = delta.Data.MessageId ?? string.Empty;
+                        var messageKey = deltaMessageId = RootMessageId(deltaMessageId);
                         if (!rootTextByMessage.TryGetValue(messageKey, out var streamed))
                             rootTextByMessage[messageKey] = streamed = new StringBuilder();
                         streamed.Append(delta.Data.DeltaContent);
                     }
                     yield return new ChatResponseUpdate
                     {
-                        MessageId = delta.Data.MessageId,
+                        MessageId = deltaMessageId,
                         Role = ChatRole.Assistant,
                         Contents = [Tag(new TextContent(delta.Data.DeltaContent), delta.AgentId)],
                     };
@@ -159,7 +165,7 @@ public static class CopilotSdkStreamAdapter
 
                 case AssistantMessageEvent rootFinal when string.IsNullOrEmpty(rootFinal.AgentId)
                                                          && !string.IsNullOrEmpty(rootFinal.Data?.Content):
-                    var rootMessageKey = rootFinal.Data.MessageId ?? string.Empty;
+                    var rootMessageKey = RootMessageId(rootFinal.Data.MessageId);
                     var coveredText = rootTextByMessage.TryGetValue(rootMessageKey, out var coverage)
                         ? coverage.ToString() : string.Empty;
                     var replacesCoverage = !rootFinal.Data.Content.StartsWith(coveredText, StringComparison.Ordinal);
@@ -175,7 +181,7 @@ public static class CopilotSdkStreamAdapter
                             };
                         yield return new ChatResponseUpdate
                         {
-                            MessageId = rootFinal.Data.MessageId,
+                            MessageId = rootMessageKey,
                             Role = ChatRole.Assistant,
                             Contents = [finalText],
                         };
