@@ -213,6 +213,23 @@ internal sealed class CopilotSdkRootEventQueue
         }
     }
 
+    internal bool IsReceiving(ChannelReader<SessionEvent> reader)
+    {
+        lock (this.gate)
+            return !this.stopped && !this.sealedForDrain && ReferenceEquals(this.receiving?.Reader, reader);
+    }
+
+    internal Task StartSteering(ChannelReader<SessionEvent> reader, Func<bool> admissionOpen, Func<Task> send)
+    {
+        lock (this.gate)
+        {
+            if (!this.IsReceiving(reader) || !admissionOpen())
+                throw new OperationCanceledException("The owning Copilot turn no longer accepts steering.");
+            // Native start, terminal receipt and sealing share this gate; never await here.
+            return send();
+        }
+    }
+
     internal void Stop()
     {
         lock (this.gate)

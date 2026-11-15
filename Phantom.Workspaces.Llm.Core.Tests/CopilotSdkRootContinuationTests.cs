@@ -115,6 +115,225 @@ public sealed class CopilotSdkRootContinuationTests
         Assert.Equal(0, native.SubscriberCount);
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public async Task AgentChat_PendingImmediateAcrossNativeAdmission_IsHandedToTheSameActiveRun(
+        bool pendingAcknowledgement, bool failSteering, bool reentrantAddition)
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var appendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var appendRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var appended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var acknowledgement = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!pendingAcknowledgement) acknowledgement.SetResult();
+        var originalFailure = new IOException("original pending steering delivery failure");
+        var sends = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        native.SendHandler = (message, _) =>
+        {
+            if (message.Mode != "immediate") return acknowledgement.Task;
+            sends.Enqueue(message.Prompt!);
+            return failSteering && message.Prompt == "pending steering"
+                ? Task.FromException(originalFailure) : Task.CompletedTask;
+        };
+        var store = new SerializedStore
+        {
+            BeforeWriteAsync = async request =>
+            {
+                if (request.NewMessages?.Any(message => message.Text == "initial request") != true) return;
+                appendEntered.TrySetResult();
+                await appendRelease.Task;
+            },
+            AfterWriteAsync = request =>
+            {
+                if (request.NewMessages?.Any(message => message.Text == "initial request") == true)
+                    appended.TrySetResult();
+                return Task.CompletedTask;
+            },
+        };
+        AgentChat? owner = null;
+        CopilotSdkChatClient? sdk = null;
+        var foreground = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        await using var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(), AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ForegroundScheduler = foreground,
+            ChatClientFactoryOverride = _ =>
+            {
+                sdk = new("gpt-5", "Copilot", null, null, queueManager: owner!.InputQueueManager);
+                sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+                return Task.FromResult<IChatClient>(sdk);
+            },
+            AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+        }, constructed => owner = constructed);
+        var firstCompletion = new AgentInputTurnCompletion();
+        var secondCompletion = new AgentInputTurnCompletion();
+        try
+        {
+            chat.EnqueueUserMessage("initial request");
+            await appendEntered.Task;
+            Assert.Equal(1, native.SendAsyncCallCount);
+            var run = await Task.Factory.StartNew(() => Assert.Single(chat.RunningItems).AssistantRunId,
+                CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
+            if (pendingAcknowledgement)
+            {
+                appendRelease.SetResult();
+                await appended.Task;
+                Assert.False(acknowledgement.Task.IsCompleted);
+            }
+            if (reentrantAddition)
+                sdk!.SteeringMessageForwarded += message =>
+                {
+                    if (message.Text == "pending steering")
+                        chat.InputQueueManager.Enqueue(chat.InputQueueManager.ImmediateQueue,
+                            [new() { Messages = [new ChatMessage(ChatRole.User, "racing steering")], TurnCompletion = secondCompletion }]);
+                };
+            chat.InputQueueManager.Enqueue(chat.InputQueueManager.ImmediateQueue,
+                [new() { Messages = [new ChatMessage(ChatRole.User, "pending steering")], TurnCompletion = firstCompletion }]);
+            Assert.Empty(sends);
+            appendRelease.TrySetResult();
+            acknowledgement.TrySetResult();
+            var applied = await Task.Factory.StartNew(
+                () => CopilotSdkRetirementPersistenceScenario.WhenRunningTextAsync(chat, "original request remains active"),
+                CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
+            native.Emit(new AssistantMessageDeltaEvent
+            {
+                Data = new() { MessageId = "active-answer", DeltaContent = "original request remains active" },
+            });
+            await applied;
+            Assert.Equal(reentrantAddition ? ["pending steering", "racing steering"] : ["pending steering"], sends.ToArray());
+            if (failSteering)
+                Assert.Same(originalFailure, await Assert.ThrowsAsync<IOException>(() => firstCompletion.Settlement));
+            else await firstCompletion.Settlement;
+            if (reentrantAddition) await secondCompletion.Settlement;
+            var outcomes = await sdk!.WaitForSteeringDeliveriesAsync();
+            Assert.Equal(reentrantAddition ? 2 : 1, outcomes.Length);
+            Assert.Equal(!failSteering, outcomes[0].Delivered);
+            if (failSteering) Assert.Same(originalFailure, outcomes[0].Failure);
+            await Task.Factory.StartNew(() =>
+            {
+                Assert.Equal(run, Assert.Single(chat.RunningItems).AssistantRunId);
+                var items = Assert.Single(chat.RunningItems).Items;
+                Assert.Single(items, item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "pending steering"));
+            }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, foreground);
+            Assert.Empty(chat.InputQueueManager.ImmediateQueue.Items);
+            var finished = WhenSettled(chat, "original request remains active");
+            native.Emit(new SessionIdleEvent { Data = new() });
+            await finished;
+            Assert.Equal(reentrantAddition ? 3 : 2, native.SendAsyncCallCount);
+            Assert.Single(chat.History, item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "pending steering"));
+            Assert.Equal(failSteering, chat.History.SelectMany(item => item.Contents).OfType<ErrorContent>().Any());
+            Assert.Single(await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId }),
+                message => message.Text == "original request remains active");
+        }
+        finally
+        {
+            appendRelease.TrySetResult();
+            acknowledgement.TrySetResult();
+            native.Emit(new SessionIdleEvent { Data = new() });
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "cancelled")]
+    [InlineData(true, "cancelled")]
+    [InlineData(false, "terminal")]
+    [InlineData(true, "terminal")]
+    [InlineData(false, "send-failure")]
+    [InlineData(true, "send-failure")]
+    public async Task AgentChat_PendingImmediateAcrossEndedAdmission_IsNotReplayedIntoRetiredRequest(
+        bool pendingAcknowledgement, string ending)
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var appended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var acknowledgement = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!pendingAcknowledgement && ending != "send-failure") acknowledgement.SetResult();
+        var originalFailure = new IOException("original native acknowledgement failure");
+        var immediateSends = 0;
+        native.SendHandler = (message, _) =>
+        {
+            if (message.Mode != "immediate") return acknowledgement.Task;
+            Interlocked.Increment(ref immediateSends);
+            return Task.CompletedTask;
+        };
+        var store = new SerializedStore
+        {
+            BeforeWriteAsync = async request =>
+            {
+                if (request.NewMessages?.Any(message => message.Text == "initial request") != true) return;
+                entered.TrySetResult();
+                await release.Task;
+            },
+            AfterWriteAsync = request =>
+            {
+                if (request.NewMessages?.Any(message => message.Text == "initial request") == true) appended.TrySetResult();
+                return Task.CompletedTask;
+            },
+        };
+        AgentChat? owner = null;
+        CopilotSdkChatClient? sdk = null;
+        var foreground = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        await using var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(), AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ForegroundScheduler = foreground,
+            ChatClientFactoryOverride = _ =>
+            {
+                sdk = new("gpt-5", "Copilot", null, null, queueManager: owner!.InputQueueManager);
+                sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+                return Task.FromResult<IChatClient>(sdk);
+            },
+            AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+        }, constructed => owner = constructed);
+        var retired = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
+        {
+            if (chat.RunningItems.Count == 0) retired.TrySetResult(chat.DisposeAsync().AsTask());
+        };
+        var pending = new AgentInputTurnCompletion();
+        try
+        {
+            var initial = chat.EnqueueUserMessageWithCompletion("initial request");
+            await entered.Task;
+            if (pendingAcknowledgement) { release.TrySetResult(); await appended.Task; }
+            chat.InputQueueManager.Enqueue(chat.InputQueueManager.ImmediateQueue,
+                [new() { Messages = [new ChatMessage(ChatRole.User, "not delivered to retired request")], TurnCompletion = pending }]);
+            if (ending == "cancelled") await chat.InterruptAsync();
+            else if (ending == "terminal") native.Emit(new SessionIdleEvent { Data = new() });
+            else acknowledgement.TrySetException(originalFailure);
+            release.TrySetResult();
+            acknowledgement.TrySetResult();
+            var disposal = await retired.Task;
+            var failure = await Record.ExceptionAsync(() => disposal);
+            if (ending == "send-failure")
+            {
+                Assert.Same(originalFailure, await Assert.ThrowsAsync<IOException>(() => initial.Settlement));
+                Assert.Contains(originalFailure, Assert.IsType<AggregateException>(failure).Flatten().InnerExceptions);
+            }
+            else Assert.Null(failure);
+            Assert.False(pending.Settlement.IsCompleted);
+            Assert.Same(pending, Assert.Single(chat.InputQueueManager.ImmediateQueue.Items).TurnCompletion);
+            Assert.Empty(await sdk!.WaitForSteeringDeliveriesAsync());
+            Assert.Equal(0, immediateSends);
+            Assert.Equal(1, native.SendAsyncCallCount);
+            Assert.Equal(0, native.SubscriberCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            acknowledgement.TrySetResult();
+            native.Emit(new SessionIdleEvent { Data = new() });
+        }
+    }
+
     [Fact]
     public async Task ParentDispose_DrainsStillPendingAcceptedBatchBeforeResourceTeardown()
     {
@@ -1051,6 +1270,7 @@ public sealed class CopilotSdkRootContinuationTests
         public Exception? RestoreFailure { get; set; }
         public Func<Task>? BeforeStoreAsync { get; init; }
         public Func<StoreRequestAgent, Task>? BeforeWriteAsync { get; init; }
+        public Func<StoreRequestAgent, Task>? AfterWriteAsync { get; init; }
         public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
         {
             if (this.BeforeStoreAsync is { } before) await before();
@@ -1064,6 +1284,7 @@ public sealed class CopilotSdkRootContinuationTests
                     AgentSessionJson = request.Agent.AgentSessionJson?.DeepClone().AsBsonDocument,
                 },
             }, cancellationToken);
+            if (this.AfterWriteAsync is { } after) await after(request);
         }
         public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default) =>
             this.RestoreFailure is { } failure ? ValueTask.FromException<PersistedAgent?>(failure)

@@ -7,6 +7,135 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class CopilotQueueSteeringTests
 {
     [Fact]
+    public void CatchUpAdmissionFailure_UnsubscribesAndPreservesUnclaimedInput()
+    {
+        var queues = new AgentInputQueueManager();
+        using var client = CreateCopilotClient(queues);
+        queues.Enqueue(queues.ImmediateQueue, [Item("unclaimed")]);
+        var original = new IOException("original catch-up admission failure");
+        var sends = 0;
+        Assert.Same(original, Assert.Throws<IOException>(() => client.SubscribeImmediateQueueSteering(
+            (_, _) => { sends++; return Task.CompletedTask; }, () => throw original)));
+        Assert.Single(queues.ImmediateQueue.Items);
+        queues.Enqueue(queues.ImmediateQueue, [Item("next")]);
+        using var fresh = client.SubscribeImmediateQueueSteering((_, _) => { sends++; return Task.CompletedTask; });
+        Assert.Equal(2, sends);
+        Assert.Empty(queues.ImmediateQueue.Items);
+    }
+
+    [Fact]
+    public async Task SubscriptionCatchUp_ConcurrentAdditionDuringPendingDelivery_ClaimsEachInputOnce()
+    {
+        var queues = new AgentInputQueueManager();
+        using var client = CreateCopilotClient(queues);
+        queues.Enqueue(queues.ImmediateQueue, [Item("before subscription")]);
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstAcknowledgement = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sent = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var enqueue = Task.Run(async () =>
+        {
+            await firstStarted.Task;
+            queues.Enqueue(queues.ImmediateQueue, [Item("concurrent addition")]);
+        });
+        using var subscription = client.SubscribeImmediateQueueSteering((message, _) =>
+        {
+            sent.Enqueue(message.Prompt!);
+            if (message.Prompt == "before subscription")
+            {
+                firstStarted.TrySetResult();
+                return firstAcknowledgement.Task;
+            }
+            secondStarted.TrySetResult();
+            return Task.CompletedTask;
+        });
+        try
+        {
+            await secondStarted.Task;
+            await enqueue;
+            Assert.False(firstAcknowledgement.Task.IsCompleted);
+            Assert.Equal(["before subscription", "concurrent addition"], sent.ToArray());
+            Assert.Empty(queues.ImmediateQueue.Items);
+        }
+        finally { firstAcknowledgement.TrySetResult(); }
+        Assert.All(await client.WaitForSteeringDeliveriesAsync(), outcome => Assert.True(outcome.Delivered));
+    }
+
+    [Fact]
+    public void RetiredSubscription_CapturedCallbackCannotSteerAfterNextTurnUnsuspendsClient()
+    {
+        var queues = new AgentInputQueueManager();
+        using var client = CreateCopilotClient(queues);
+        var oldSends = 0;
+        var old = client.SubscribeImmediateQueueSteering((_, _) => { oldSends++; return Task.CompletedTask; });
+        var handlers = (EventHandler<AgentInputQueueManager.QueueStateChangedEventArgs>)typeof(AgentInputQueueManager)
+            .GetField("QueueStateChanged", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(queues)!;
+        old.Dispose();
+        client.SteeringSuspendedForTest = false;
+        queues.Enqueue(queues.ImmediateQueue, [Item("new turn only")]);
+        handlers(queues, Added(queues.ImmediateQueue));
+        Assert.Equal(0, oldSends);
+        Assert.Single(queues.ImmediateQueue.Items);
+        var freshSends = 0;
+        using var fresh = client.SubscribeImmediateQueueSteering((_, _) => { freshSends++; return Task.CompletedTask; });
+        Assert.Equal(1, freshSends);
+        Assert.Empty(queues.ImmediateQueue.Items);
+    }
+
+    [Theory]
+    [InlineData("cancelled")]
+    [InlineData("terminal")]
+    [InlineData("sealed")]
+    [InlineData("stopped")]
+    [InlineData("replaced")]
+    [InlineData("observer")]
+    public async Task ClaimedSteering_LifetimeClosesBeforeNativeStart_ReportsUndeliveredWithoutReplay(string close)
+    {
+        var queues = new AgentInputQueueManager();
+        using var client = CreateCopilotClient(queues);
+        var receipt = new CopilotSdkRootEventQueue();
+        var reader = receipt.Acquire(false);
+        var open = true;
+        var sends = 0;
+        Exception? refused = null;
+        var observerFailure = new IOException("original steering projection observer failure");
+        client.SteeringMessageForwarded += _ =>
+        {
+            if (close == "cancelled") open = false;
+            else if (close == "terminal") receipt.Accept(new SessionIdleEvent { Data = new() });
+            else if (close == "sealed") receipt.SealAccepted();
+            else if (close == "stopped") receipt.Stop();
+            else if (close == "replaced")
+            {
+                receipt.Accept(new SessionIdleEvent { Data = new() });
+                receipt.Acquire(false);
+            }
+            else throw observerFailure;
+        };
+        var completion = new AgentInputTurnCompletion();
+        using (client.SubscribeImmediateQueueSteering((_, _) =>
+        {
+            try { return receipt.StartSteering(reader, () => open, () => { sends++; return Task.CompletedTask; }); }
+            catch (Exception failure) { refused = failure; throw; }
+        }, () => open && receipt.IsReceiving(reader)))
+        {
+            queues.Enqueue(queues.ImmediateQueue,
+                [new() { Messages = [new ChatMessage(ChatRole.User, "claimed")], TurnCompletion = completion }]);
+            var failure = await Assert.ThrowsAnyAsync<Exception>(() => completion.Settlement);
+            if (close == "observer") Assert.Same(observerFailure, failure);
+            else Assert.IsAssignableFrom<OperationCanceledException>(failure);
+            var outcome = Assert.Single(await client.WaitForSteeringDeliveriesAsync());
+            Assert.False(outcome.Delivered);
+            Assert.Same(close == "observer" ? observerFailure : refused, outcome.Failure);
+        }
+        open = true;
+        using var next = client.SubscribeImmediateQueueSteering((_, _) => { sends++; return Task.CompletedTask; });
+        Assert.Equal(0, sends);
+        Assert.Empty(queues.ImmediateQueue.Items);
+    }
+
+    [Fact]
     public async Task ForwardPendingImmediateMessages_ActiveRun_SendsQueuedItemWithImmediateMode()
     {
         var queues = new AgentInputQueueManager();

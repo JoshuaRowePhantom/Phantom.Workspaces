@@ -1913,8 +1913,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // through SubscribeImmediateQueueSteering so that fake-BeginTurnAsync test call sites
             // exercise the exact same production wiring — not a duplicated copy — when observing
             // SteeringMessageForwarded during a live turn.
-            var queueSubscription = this.SubscribeImmediateQueueSteering(
-                (options, ct) => session.SendAsync(options, ct));
+            IDisposable queueSubscription = new NoopDisposable();
+            bool SteeringAdmissionOpen() => !this.steeringSuspended
+                && !cancellationToken.IsCancellationRequested && outputDrain?.StopRequested != true;
+            void InstallSteering() => queueSubscription = this.SubscribeImmediateQueueSteering(
+                (immediate, _) => rootEvents.StartSteering(eventReader, SteeringAdmissionOpen,
+                    () => session.SendAsync(immediate, cancellationToken)),
+                () => SteeringAdmissionOpen() && rootEvents.IsReceiving(eventReader));
+            if (promptSent || continuation || acquiredContinuation) InstallSteering();
 
             var subscription = new AsyncDelegateDisposable(async () =>
             {
@@ -1959,6 +1965,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     cancellationToken.ThrowIfCancellationRequested();
                     await session.SendAsync(messageOptions!, cancellationToken).ConfigureAwait(false);
                     promptSent = true;
+                    InstallSteering();
                 },
                 () => outputDrain?.StopRequested == true && rootEvents.HasPending
                     ? Task.CompletedTask
@@ -2134,7 +2141,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// live turn instead of reproducing the wiring themselves.
     /// </summary>
     internal IDisposable SubscribeImmediateQueueSteering(
-        Func<MessageOptions, CancellationToken, Task> sendAsync)
+        Func<MessageOptions, CancellationToken, Task> sendAsync,
+        Func<bool>? admissionOpen = null)
     {
         ArgumentNullException.ThrowIfNull(sendAsync);
 
@@ -2144,11 +2152,33 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             return new NoopDisposable();
         }
 
+        var closed = false;
+        var draining = false;
+        void CatchUp() => queueManager.Mutate(() =>
+        {
+            if (closed || draining) return false;
+            draining = true;
+            try { this.ForwardPendingImmediateMessagesCore(sendAsync, admissionOpen); }
+            finally { draining = false; }
+            return true;
+        });
         void Handler(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-            => this.ForwardPendingImmediateMessages(sendAsync, e);
+        {
+            if (e.ChangeKind == AgentInputQueueManager.QueueStateChangeKind.ItemAdded) CatchUp();
+        }
 
+        void Close() => queueManager.Mutate(() =>
+        {
+            closed = true;
+            queueManager.QueueStateChanged -= Handler;
+            return true;
+        });
         queueManager.QueueStateChanged += Handler;
-        return new SyncDelegateDisposable(() => queueManager.QueueStateChanged -= Handler);
+        // The queue's existing claim/mutation gate serializes catch-up with ItemAdded.
+        // Reentrant additions are consumed by this same drain, never a nested sender.
+        try { CatchUp(); }
+        catch { Close(); throw; }
+        return new SyncDelegateDisposable(Close);
     }
 
     private sealed class NoopDisposable : IDisposable
@@ -2189,7 +2219,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             return;
         }
 
-        while (this.queueManager!.TryDequeueNextImmediate(out var item))
+        this.ForwardPendingImmediateMessagesCore(sendAsync);
+    }
+
+    private void ForwardPendingImmediateMessagesCore(
+        Func<MessageOptions, CancellationToken, Task> sendAsync,
+        Func<bool>? admissionOpen = null)
+    {
+        while (!this.steeringSuspended && admissionOpen?.Invoke() != false
+            && this.queueManager!.TryDequeueNextImmediate(out var item))
         {
             var deliveries = new List<Task<SteeringDeliveryOutcome>>();
             foreach (var message in item.Messages ?? [])
@@ -2200,10 +2238,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     continue;
                 }
 
-                // Record the forwarded steering message in history before sending it.
-                this.SteeringMessageForwarded?.Invoke(message);
-
-                var delivery = this.DeliverSteeringAsync(message, ct => sendAsync(immediateOptions, ct));
+                var delivery = this.DeliverSteeringAsync(message, ct =>
+                {
+                    // This claimed attempt owns both notification and truthful delivery failure.
+                    this.SteeringMessageForwarded?.Invoke(message);
+                    return sendAsync(immediateOptions, ct);
+                });
                 deliveries.Add(delivery);
                 lock (this.steeringDeliveries) this.steeringDeliveries.Add(delivery);
             }
