@@ -198,6 +198,100 @@ public sealed partial class CopilotSdkChatClientTests
         }
     }
 
+    [Fact]
+    public async Task FaultedPendingReceipt_RequestAdmissionDrainsBeforeReplacingTheSession()
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        await using var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        sdk.SetSubAgentDependencies(new SubAgentTestFakes.FakeRunningAgentChatFactory(), new SubAgentTestFakes.FakeSubAgentTable());
+        await InvokeEnsureSessionAsync(sdk);
+        var owner = (CopilotSdkRootEventQueue)typeof(CopilotSdkChatClient)
+            .GetField("rootEventQueue", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sdk)!;
+        var original = new IOException("observer failed after pending admission check");
+        native.Emit(new AssistantMessageDeltaEvent { Data = new() { MessageId = "pending", DeltaContent = "already accepted" } });
+        native.ListTasksHandler = _ => Task.FromException<IReadOnlyList<GitHub.Copilot.Rpc.TaskInfo>>(original);
+        native.Emit(new SessionBackgroundTasksChangedEvent { Data = new() });
+        await (Task)typeof(CopilotSdkChatClient).GetField("stateObserverPump", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sdk)!;
+        Assert.True(owner.HasPending);
+        try
+        {
+            using var batch = await sdk.AdmitRootRequestAsync(null, [new ChatMessage(ChatRole.User, "deferred request")],
+                null, () => true, CancellationToken.None);
+            Assert.Same(owner, batch.Owner);
+            Assert.True(batch.IsContinuation);
+            Assert.Null(batch.RequestSend);
+            var output = new List<ChatResponseUpdate>();
+            Assert.Same(original, await Assert.ThrowsAsync<IOException>(async () =>
+            {
+                await foreach (var update in sdk.GetStreamingResponseAsync([], new()
+                {
+                    AdditionalProperties = new()
+                    {
+                        [CopilotSdkRootBatch.OptionName] = batch,
+                        [CopilotSdkChatClient.ConsumeContinuationOptionName] = true,
+                    },
+                })) output.Add(update);
+            }));
+            Assert.Equal("already accepted", string.Concat(output.SelectMany(update => update.Contents).OfType<TextContent>().Select(text => text.Text)));
+            Assert.False(owner.HasPending);
+            Assert.Equal(0, native.SendAsyncCallCount);
+            native.ListTasksHandler = null;
+            native.Sending = _ =>
+            {
+                native.Emit(new AssistantMessageDeltaEvent { Data = new() { MessageId = "recovered", DeltaContent = "fresh after owned drain" } });
+                native.Emit(new SessionIdleEvent { Data = new() });
+            };
+            var fresh = new List<ChatResponseUpdate>();
+            await foreach (var update in sdk.GetStreamingResponseAsync([new ChatMessage(ChatRole.User, "deferred request")]))
+                fresh.Add(update);
+            Assert.Equal("fresh after owned drain", string.Concat(fresh.SelectMany(update => update.Contents).OfType<TextContent>().Select(text => text.Text)));
+            Assert.Equal(1, native.SendAsyncCallCount);
+        }
+        finally
+        {
+            while (owner.HasPending)
+            {
+                var reader = owner.Acquire(true);
+                try { await foreach (var _ in reader.ReadAllAsync()) { } }
+                catch (IOException failure) when (ReferenceEquals(failure, original)) { }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task PendingReceipt_SessionReplacementRetainsItsSubscriptionAndOutput()
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        await using var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        sdk.SetSubAgentDependencies(new SubAgentTestFakes.FakeRunningAgentChatFactory(), new SubAgentTestFakes.FakeSubAgentTable());
+        await InvokeEnsureSessionAsync(sdk);
+        var owner = (CopilotSdkRootEventQueue)typeof(CopilotSdkChatClient)
+            .GetField("rootEventQueue", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sdk)!;
+        native.Emit(new AssistantMessageDeltaEvent { Data = new() { MessageId = "retained", DeltaContent = "retained pending output" } });
+        native.Emit(new SessionIdleEvent { Data = new() });
+        sdk.SetWorkingDirectory(Path.Combine(Environment.CurrentDirectory, "Phantom.Workspaces.Llm.Core.Tests"));
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => InvokeEnsureSessionAsync(sdk));
+            Assert.Same(owner, typeof(CopilotSdkChatClient).GetField("rootEventQueue", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sdk));
+            Assert.Equal(1, native.SubscriberCount);
+            var output = new List<ChatResponseUpdate>();
+            await foreach (var update in sdk.GetStreamingResponseAsync([], new()
+            {
+                AdditionalProperties = new() { [CopilotSdkChatClient.ConsumeContinuationOptionName] = true },
+            })) output.Add(update);
+            Assert.Equal("retained pending output", string.Concat(output.SelectMany(update => update.Contents).OfType<TextContent>().Select(text => text.Text)));
+            Assert.Equal(0, native.SendAsyncCallCount);
+        }
+        finally
+        {
+            while (owner.HasPending)
+                await foreach (var _ in owner.Acquire(true).ReadAllAsync()) { }
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

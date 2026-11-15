@@ -2583,7 +2583,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
         if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature
-            && this.rootEventQueue?.IsSealed != true)
+            && this.rootEventQueue is { } existingRoot && (!existingRoot.IsSealed || existingRoot.HasPending))
         {
             return existingSession;
         }
@@ -2592,7 +2592,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         try
         {
             if (this.copilotSession is { } alreadyInitialized && this.currentSessionSignature == signature
-                && this.rootEventQueue?.IsSealed != true)
+                && this.rootEventQueue is { } initializedRoot && (!initializedRoot.IsSealed || initializedRoot.HasPending))
             {
                 return alreadyInitialized;
             }
@@ -2644,6 +2644,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             if (this.copilotSession is { } staleSession)
             {
+                var retiringRoot = this.rootEventQueue;
+                retiringRoot?.SealAccepted();
+                if (retiringRoot?.HasPending == true)
+                    throw new InvalidOperationException("Accepted Copilot root continuations must be consumed before session replacement.");
                 // Preserve the existing session id so the next CreateOrResumeSessionAsync call
                 // resumes the Copilot CLI session with the updated config (e.g. new working
                 // directory) rather than creating a blank new session. Model changes no longer
