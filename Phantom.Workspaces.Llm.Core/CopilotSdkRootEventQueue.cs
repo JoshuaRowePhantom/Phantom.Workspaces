@@ -1,5 +1,6 @@
 using GitHub.Copilot;
 using System.Threading.Channels;
+using System.Runtime.CompilerServices;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -43,8 +44,12 @@ internal sealed class CopilotSdkOutputDrain
     private Action<Exception>? fail;
     private Exception? failure;
     private bool stopRequested;
+    private Lazy<Task>? flushAccepted;
     internal bool StopRequested { get { lock (this.gate) return this.stopRequested; } }
     internal bool HasOwner { get { lock (this.gate) return this.seal is not null; } }
+
+    internal void SetAcceptedFlushBoundary(Func<Task> flush) => this.flushAccepted = new(flush);
+    internal Task FlushAcceptedAsync() => this.flushAccepted?.Value ?? Task.CompletedTask;
 
     internal void Attach(Action sealBatch, Action<Exception>? failBatch = null)
     {
@@ -91,6 +96,9 @@ internal sealed class CopilotSdkOutputDrain
 /// <summary>Session-owned receipt queue, including autonomous root turns between requests.</summary>
 internal sealed class CopilotSdkRootEventQueue
 {
+    // A returned unread suffix is still the same raw batch. Weak keys let completed
+    // batches release coverage without retaining a session's entire transcript.
+    private readonly ConditionalWeakTable<ChannelReader<SessionEvent>, CopilotSdkStreamAdapter.TranslationState> translations = new();
     private readonly object gate = new();
     private readonly Queue<ChannelReader<SessionEvent>> pending = new();
     private Channel<SessionEvent>? receiving;
@@ -102,6 +110,9 @@ internal sealed class CopilotSdkRootEventQueue
 
     internal event Action? ContinuationAvailable;
 
+    internal CopilotSdkStreamAdapter.TranslationState TranslationFor(ChannelReader<SessionEvent> reader) =>
+        this.translations.GetValue(reader, static _ => new());
+
     internal bool HasPending
     {
         get { lock (this.gate) return this.pending.Count > 0; }
@@ -109,6 +120,10 @@ internal sealed class CopilotSdkRootEventQueue
     internal bool IsSealed
     {
         get { lock (this.gate) return this.sealedForDrain; }
+    }
+    internal bool HasFailure
+    {
+        get { lock (this.gate) return this.failure is not null; }
     }
     internal long ReceiptVersion
     {

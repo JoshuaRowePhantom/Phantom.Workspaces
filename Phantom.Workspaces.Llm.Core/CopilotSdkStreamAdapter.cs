@@ -21,6 +21,13 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 public static class CopilotSdkStreamAdapter
 {
+    internal sealed class TranslationState
+    {
+        internal HashSet<Type> ReportedTypes { get; } = [];
+        internal Dictionary<string, StringBuilder> RootTextByMessage { get; } = new(StringComparer.Ordinal);
+        internal string? AnonymousRootMessageId { get; set; }
+    }
+
     /// <summary>
     /// <see cref="AIContent.AdditionalProperties"/> key carrying the originating sub-agent ID.
     /// Absent on root-agent content.
@@ -127,19 +134,25 @@ public static class CopilotSdkStreamAdapter
     /// factory should pass a <see cref="ILogger"/> so genuinely-unknown SDK additions remain
     /// diagnosable at <see cref="LogLevel.Debug"/>.
     /// </param>
-    public static async IAsyncEnumerable<ChatResponseUpdate> TranslateCopilotSdkSessionEvents(
+    public static IAsyncEnumerable<ChatResponseUpdate> TranslateCopilotSdkSessionEvents(
         ChannelReader<SessionEvent> events,
         ILogger? logger,
+        CancellationToken cancellationToken = default)
+        => TranslateCopilotSdkSessionEvents(events, logger, new TranslationState(), cancellationToken);
+
+    internal static async IAsyncEnumerable<ChatResponseUpdate> TranslateCopilotSdkSessionEvents(
+        ChannelReader<SessionEvent> events,
+        ILogger? logger,
+        TranslationState state,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(events);
         logger ??= NullLogger.Instance;
-        var reportedTypes = new HashSet<Type>();
-        var rootTextByMessage = new Dictionary<string, StringBuilder>(StringComparer.Ordinal);
+        var reportedTypes = state.ReportedTypes;
+        var rootTextByMessage = state.RootTextByMessage;
         // Anonymous frames need their batch-local identity before a durable prefix is written.
-        string? anonymousRootMessageId = null;
         string RootMessageId(string? nativeId) => string.IsNullOrEmpty(nativeId)
-            ? anonymousRootMessageId ??= "phantom-copilot-root-" + Guid.NewGuid().ToString("n")
+            ? state.AnonymousRootMessageId ??= "phantom-copilot-root-" + Guid.NewGuid().ToString("n")
             : nativeId;
 
         await foreach (var sessionEvent in events.ReadAllAsync(cancellationToken).ConfigureAwait(false))

@@ -5,6 +5,29 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSdkRootFailureFenceTests
 {
+    [Fact]
+    public void TranslatorCoverage_BelongsToTheOriginalReaderNotTheNextBatch()
+    {
+        var root = new CopilotSdkRootEventQueue();
+        var first = root.Acquire(false);
+        var state = root.TranslationFor(first);
+        state.AnonymousRootMessageId = "original anonymous identity";
+        root.Accept(new AssistantMessageDeltaEvent { Data = new() { MessageId = "A", DeltaContent = "draft" } });
+        root.ReturnUnconsumed(first, true);
+        var suffix = root.Acquire(true);
+        Assert.Same(first, suffix);
+        Assert.Same(state, root.TranslationFor(suffix));
+        while (suffix.TryRead(out _)) { }
+        root.Release(suffix);
+        root.Accept(new AssistantMessageDeltaEvent { Data = new() { MessageId = "A", DeltaContent = "distinct batch" } });
+        var next = root.Acquire(true);
+        Assert.NotSame(state, root.TranslationFor(next));
+        Assert.Null(root.TranslationFor(next).AnonymousRootMessageId);
+        Assert.Empty(root.TranslationFor(next).RootTextByMessage);
+        while (next.TryRead(out _)) { }
+        root.Release(next);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

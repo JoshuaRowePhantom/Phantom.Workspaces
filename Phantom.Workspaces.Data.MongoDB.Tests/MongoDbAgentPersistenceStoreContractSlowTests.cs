@@ -103,6 +103,52 @@ public sealed class MongoDbAgentPersistenceStoreContractSlowTests : AgentPersist
     }
 
     [Theory]
+    [InlineData("dispatch", "draft", false, false)]
+    [InlineData("dispatch", "draft completed", false, false)]
+    [InlineData("dispatch", "replacement", false, false)]
+    [InlineData("dispatch", "draft", true, false)]
+    [InlineData("dispatch", "draft completed", true, false)]
+    [InlineData("dispatch", "replacement", true, false)]
+    [InlineData("dispatch", "draft completed", true, true)]
+    [InlineData("dispatch", "replacement", false, true)]
+    [InlineData("observer", null, false, true)]
+    [InlineData("retirement", null, false, true)]
+    [InlineData("dispatch", "replacement", true, true, true, "shutdown")]
+    [InlineData("observer", null, false, true, true, "interrupt")]
+    public async Task AgentChat_DispatchRecoveryAndFlushAcknowledgement_RealMongo(
+        string entry, string? final, bool anonymous, bool noIdle, bool flushFailure = false, string exit = "none")
+    {
+        await this.ResetStoreAsync();
+        BsonDocument? original = null;
+        string? identity = null;
+        var collection = this._fixture.Database.GetCollection<BsonDocument>("contract-test-agent-persistence-messages");
+        async Task<BsonDocument> ReadIdentityAsync()
+        {
+            var documents = await collection.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync();
+            return Assert.Single(documents, document => document.Elements.Any(element =>
+                element.Name.Equals("MessageId", StringComparison.OrdinalIgnoreCase) && element.Value == identity));
+        }
+        var productId = await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunActiveFailureDrainAsync(
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"), entry,
+            cleanupFailure: flushFailure,
+            scenario: new(final, anonymous, noIdle, FlushFailure: flushFailure, Exit: exit, PrefixPersisted: async message =>
+            {
+                identity = message.MessageId;
+                original = await ReadIdentityAsync();
+            }));
+        if (final is not null)
+        {
+            Assert.NotNull(original);
+            var corrected = await ReadIdentityAsync();
+            Assert.Equal(original["_id"], corrected["_id"]);
+            var sequence = original.Names.Single(name => name.Equals("Sequence", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(original[sequence], corrected[sequence]);
+        }
+        var messages = await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId });
+        await this.AssertUniqueSequencesAsync(productId, messages.Length);
+    }
+
+    [Theory]
     [InlineData("observer")]
     [InlineData("retirement")]
     [InlineData("dispatch")]

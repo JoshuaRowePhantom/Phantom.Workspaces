@@ -28,6 +28,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
     internal event Action<ChatMessage>? MessagePersisted;
     internal event Action<ChatResponseUpdate>? AcceptedUpdateRecovered;
+    internal Func<Task>? AcceptedProjectionBoundary { get; set; }
     internal StreamingAggregationWork? AggregationWork { get; private set; }
 
     public StreamingPersistenceMiddleware(
@@ -77,7 +78,9 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
         var session = this.currentSession;
         var origin = this.documentOrigin;
         PersistedAgent? agentSnapshot = null;
+        Exception? primaryFailure = null;
         var drain = this.inner.GetService<CopilotSdkChatClient>() is not null ? new CopilotSdkOutputDrain() : null;
+        var projectAccepted = this.AcceptedProjectionBoundary;
         if (drain is not null)
         {
             if (admittedBatch?.HasAcceptedOutput == true)
@@ -85,11 +88,27 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             options = options?.Clone() ?? new();
             options.AdditionalProperties ??= [];
             options.AdditionalProperties[CopilotSdkOutputDrain.OptionName] = drain;
+            drain.SetAcceptedFlushBoundary(async () =>
+            {
+                List<Exception> failures = [];
+                try
+                {
+                    if (!persistenceFailed)
+                        while (persistedCount < accumulator.Count)
+                            await PersistNextAsync(accumulator.GetMessage(persistedCount)).ConfigureAwait(false);
+                }
+                catch (Exception failure) { failures.Add(failure); }
+                // Projection owns an independent acknowledgement, including when a
+                // committed-but-failed append cannot safely be retried.
+                try { if (projectAccepted is not null) await projectAccepted().ConfigureAwait(false); }
+                catch (Exception failure) { failures.Add(failure); }
+                if (failures.Count == 1) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+                if (failures.Count > 1) throw new AggregateException("Accepted output flush and projection failed.", failures);
+            });
         }
         using var cancellationRegistration = cancellationToken.Register(() => drain?.RequestStop());
         var providerCompleted = false;
         var providerFailed = false;
-        Exception? primaryFailure = null;
 
         var enumerator = this.inner
             .GetStreamingResponseAsync(messages, options, cancellationToken)

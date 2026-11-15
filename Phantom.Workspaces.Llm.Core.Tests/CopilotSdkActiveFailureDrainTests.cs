@@ -7,6 +7,68 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed partial class CopilotSdkChatClientTests
 {
     [Theory]
+    [InlineData("observer")]
+    [InlineData("retirement")]
+    public Task FaultSealedSingleBatch_CancellationCannotRetireBeforeOuterAcknowledgement(string entry)
+    {
+        var store = new CopilotSdkRootContinuationTests.SerializedStore();
+        return CopilotSdkRetirementPersistenceScenario.RunActiveFailureDrainAsync(() => store, entry,
+            scenario: new(NoIdle: true, Exit: "interrupt-before-drain", SingleBatch: true));
+    }
+
+    [Theory]
+    [InlineData("draft completed", true, "interrupt", false)]
+    [InlineData("replacement", false, "shutdown", false)]
+    [InlineData("replacement", true, "shutdown", true)]
+    public Task DispatchTailNoIdle_CorrectionAndAcknowledgementSurviveCancellationOrShutdown(
+        string final, bool anonymous, string exit, bool flushFailure)
+    {
+        var store = new CopilotSdkRootContinuationTests.SerializedStore();
+        return CopilotSdkRetirementPersistenceScenario.RunActiveFailureDrainAsync(() => store, "dispatch", true,
+            new(final, anonymous, NoIdle: true, FlushFailure: flushFailure, Exit: exit));
+    }
+
+    [Theory]
+    [InlineData("draft", false, false)]
+    [InlineData("draft completed", false, false)]
+    [InlineData("replacement", false, false)]
+    [InlineData("draft", true, false)]
+    [InlineData("draft completed", true, false)]
+    [InlineData("replacement", true, false)]
+    [InlineData("draft", false, true)]
+    [InlineData("draft completed", false, true)]
+    [InlineData("replacement", false, true)]
+    [InlineData("draft", true, true)]
+    [InlineData("draft completed", true, true)]
+    [InlineData("replacement", true, true)]
+    public Task DispatchTailRecovery_PreservesOriginalMessageCoverageAndIdentity(string final, bool anonymous, bool noIdle)
+    {
+        var store = new CopilotSdkRootContinuationTests.SerializedStore();
+        return CopilotSdkRetirementPersistenceScenario.RunActiveFailureDrainAsync(() => store, "dispatch", noIdle,
+            new(final, anonymous, noIdle));
+    }
+
+    [Theory]
+    [InlineData("observer", false, false, "none")]
+    [InlineData("retirement", false, false, "none")]
+    [InlineData("dispatch", false, false, "none")]
+    [InlineData("poller", false, false, "none")]
+    [InlineData("secondary-dispatch", false, false, "none")]
+    [InlineData("observer", true, true, "none")]
+    [InlineData("dispatch", true, true, "none")]
+    [InlineData("retirement", false, true, "none")]
+    [InlineData("observer", false, false, "interrupt")]
+    [InlineData("retirement", false, false, "shutdown")]
+    [InlineData("dispatch", false, true, "shutdown")]
+    public Task FaultSealedNoIdle_AwaitsAcceptedFlushAndProjectionBeforeRetirement(
+        string entry, bool flushFailure, bool disposalFailure, string exit)
+    {
+        var store = new CopilotSdkRootContinuationTests.SerializedStore();
+        return CopilotSdkRetirementPersistenceScenario.RunActiveFailureDrainAsync(() => store, entry, disposalFailure,
+            new(NoIdle: true, FlushFailure: flushFailure, Exit: exit));
+    }
+
+    [Theory]
     [InlineData(true, true)]
     [InlineData(false, true)]
     [InlineData(true, false)]

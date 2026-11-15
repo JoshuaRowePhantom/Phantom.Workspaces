@@ -2688,6 +2688,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     ? this.client as StreamingPersistenceMiddleware
                     : null;
                 Action<ChatResponseUpdate>? recoverAcceptedUpdate = null;
+                Func<Task>? projectAcceptedOutput = null;
                 Exception? ownedRunFailure = null;
                 try
                 {
@@ -2740,6 +2741,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             partialResponses.Notify(recovered);
                         };
                         acceptedOutputOwner.AcceptedUpdateRecovered += recoverAcceptedUpdate;
+                        projectAcceptedOutput = () => partialResponses.DrainAsync();
+                        acceptedOutputOwner.AcceptedProjectionBoundary = projectAcceptedOutput;
                     }
 
                     lock (this.steeringLock)
@@ -2908,6 +2911,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             finally
                             {
                                 acceptedOutputOwner.AcceptedUpdateRecovered -= recoverAcceptedUpdate;
+                                if (ReferenceEquals(acceptedOutputOwner.AcceptedProjectionBoundary, projectAcceptedOutput))
+                                    acceptedOutputOwner.AcceptedProjectionBoundary = null;
                             }
                         }
 

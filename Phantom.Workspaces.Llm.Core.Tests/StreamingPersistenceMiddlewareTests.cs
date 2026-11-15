@@ -11,6 +11,64 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public class StreamingPersistenceMiddlewareTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AcceptedFlushBoundary_ObservesIndependentStoreAndProjectionOutcomesWithoutRetry(bool appendFails, bool projectionFails)
+    {
+        var appendFailure = new IOException("ambiguous boundary append");
+        var projectionFailure = new InvalidOperationException("independent boundary projection");
+        var store = new SpyAgentPersistenceStore { Failure = appendFails ? appendFailure : null };
+        var provider = CreateProvider(store);
+        using var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        CopilotSdkOutputDrain? owned = null;
+        var inner = new FailingCleanupClient(null, null)
+        {
+            Copilot = sdk, ConfigureDrain = drain => owned = drain,
+            BeforeTerminalRead = () => owned!.FlushAcceptedAsync(),
+        };
+        var projections = 0;
+        var projectionEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var projectionRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var middleware = new StreamingPersistenceMiddleware(inner, provider, store)
+        {
+            AcceptedProjectionBoundary = async () =>
+            {
+                projections++;
+                projectionEntered.TrySetResult();
+                await projectionRelease.Task;
+                if (projectionFails) throw projectionFailure;
+            },
+        };
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+        var consumption = ConsumeAsync(middleware, session);
+        await projectionEntered.Task;
+        var repeatedBoundary = owned!.FlushAcceptedAsync();
+        try
+        {
+            Assert.False(consumption.IsCompleted);
+            Assert.Equal(0, inner.Disposals);
+            Assert.Equal(1, store.StoreCallCount);
+        }
+        finally { projectionRelease.TrySetResult(); }
+        var failure = await Record.ExceptionAsync(() => consumption);
+        Assert.Same(failure, await Record.ExceptionAsync(() => repeatedBoundary));
+        if (!appendFails && !projectionFails) Assert.Null(failure);
+        else
+        {
+            var errors = failure is AggregateException aggregate ? aggregate.Flatten().InnerExceptions.ToArray() : [failure!];
+            Assert.Equal((appendFails ? 1 : 0) + (projectionFails ? 1 : 0), errors.Length);
+            if (appendFails) Assert.Contains(appendFailure, errors);
+            if (projectionFails) Assert.Contains(projectionFailure, errors);
+        }
+        Assert.Equal(1, store.StoreCallCount);
+        Assert.Equal(1, projections);
+        Assert.Equal(1, inner.Disposals);
+    }
+
     [Fact]
     public async Task AppendFailure_FencesNativeAdmissionBeforeProviderDisposalWithoutRetry()
     {
@@ -69,6 +127,7 @@ public class StreamingPersistenceMiddlewareTests
         public CopilotSdkChatClient? Copilot { get; init; }
         public Action<CopilotSdkOutputDrain>? ConfigureDrain { get; init; }
         public Action? BeforeDisposal { get; init; }
+        public Func<Task>? BeforeTerminalRead { get; init; }
         public int Disposals { get; private set; }
         private int reads;
         public ChatResponseUpdate Current => MakeUpdate("accepted trailing output");
@@ -80,10 +139,12 @@ public class StreamingPersistenceMiddlewareTests
             return this;
         }
         public IAsyncEnumerator<ChatResponseUpdate> GetAsyncEnumerator(CancellationToken cancellationToken = default) => this;
-        public ValueTask<bool> MoveNextAsync()
+        public async ValueTask<bool> MoveNextAsync()
         {
-            if (this.reads++ == 0) return ValueTask.FromResult(true);
-            return providerFailure is null ? ValueTask.FromResult(false) : ValueTask.FromException<bool>(providerFailure);
+            if (this.reads++ == 0) return true;
+            if (this.BeforeTerminalRead is { } beforeRead) await beforeRead();
+            if (providerFailure is not null) throw providerFailure;
+            return false;
         }
         public ValueTask DisposeAsync()
         {

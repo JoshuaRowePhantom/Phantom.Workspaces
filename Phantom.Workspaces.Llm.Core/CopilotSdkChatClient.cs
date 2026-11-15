@@ -1812,6 +1812,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 if (drainingFailure && failedRoot?.HasPending == false && failedSession is not null)
                 {
+                    // This is an outer-owned callback, not an await of the iterator's
+                    // own completion/finally. Its store and projection can run while
+                    // the middleware awaits this MoveNext, before native retirement.
+                    try { if (outputDrain is not null) await outputDrain.FlushAcceptedAsync().ConfigureAwait(false); }
+                    catch (Exception failure) { AddOwnedFailure(ownedFailures, failure); }
                     try { await this.RetireFailedStreamingSessionAsync(failedSession).ConfigureAwait(false); }
                     catch (Exception failure) { AddOwnedFailure(ownedFailures, failure); }
                 }
@@ -1957,6 +1962,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         .TranslateCopilotSdkSessionEvents(
                             eventReader,
                             this.loggerFactory?.CreateLogger(typeof(CopilotSdkStreamAdapter).FullName!),
+                            rootEvents.TranslationFor(eventReader),
                             outputDrain is null ? turnCancellationToken : CancellationToken.None)
                         .ConfigureAwait(false))
                     {
@@ -1965,7 +1971,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
                     rootEvents.CompleteDispatch(error => channel.Writer.TryComplete(error));
                 }
-                catch (OperationCanceledException) when (turnCancellationToken.IsCancellationRequested)
+                catch (OperationCanceledException) when (outputDrain is null && turnCancellationToken.IsCancellationRequested)
                 {
                     throw;
                 }
@@ -2063,9 +2069,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     promptSent = true;
                     InstallSteering();
                 },
-                () => drainingFailure || outputDrain?.StopRequested == true && rootEvents.HasPending
-                    ? Task.CompletedTask
-                    : this.AbortAndInvalidateSessionAsync(session, router),
+                () =>
+                {
+                    if (rootEvents.HasFailure)
+                    {
+                        failedSession = session;
+                        failedRoot = rootEvents;
+                        return Task.CompletedTask;
+                    }
+                    return drainingFailure || outputDrain?.StopRequested == true && rootEvents.HasPending
+                        ? Task.CompletedTask
+                        : this.AbortAndInvalidateSessionAsync(session, router);
+                },
                 () =>
                 {
                     if (rootEvents.IsSealed || rootEvents.HasPending)
