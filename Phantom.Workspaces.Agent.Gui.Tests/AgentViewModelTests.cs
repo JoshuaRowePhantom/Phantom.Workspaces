@@ -18,6 +18,202 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentViewModelTests
 {
+    [AvaloniaFact]
+    public async Task AddSubAgentSlotEager_RecursiveDisplayConstructionFails_ReleasesAllStagedResources()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var child = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var runningItem = new AgentChatRunningItem();
+        child.RunningItems.Add(runningItem);
+        var nested = new DisplayConstructionSubAgent();
+        var failure = new InvalidOperationException("display failed after nested subscription");
+        var reachedPartialDisplay = false;
+        var failing = new DisplayConstructionSubAgent
+        {
+            ConstructionFailure = failure,
+            BeforeReadingChildren = () =>
+            {
+                reachedPartialDisplay = true;
+                Assert.Equal(2, nested.SubscriberCount); // Browser and staged recursive display.
+                Assert.True(RunningSubAgentDisplayTests.SubscriptionCounts(child, runningItem)[1] > 0);
+            },
+        };
+        GetSubAgentItems(child).Add(nested);
+        GetSubAgentItems(child).Add(failing);
+        var childSubscriptions = RunningSubAgentDisplayTests.SubscriptionCounts(child, runningItem);
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var baseline = vm.AllDetailContents.ToArray();
+        GetSubAgentItems(chat).Add(child);
+        viewer.Drain();
+        await vm.ChildProjectionIdle;
+
+        Assert.True(reachedPartialDisplay);
+        Assert.Empty(vm.SubAgentDisplays);
+        Assert.Empty(vm.SubAgentsContainer.Slots);
+        Assert.Equal(baseline, vm.AllDetailContents);
+        Assert.Equal(childSubscriptions, RunningSubAgentDisplayTests.SubscriptionCounts(child, runningItem));
+        Assert.Equal(0, nested.SubscriberCount);
+        Assert.Equal(0, failing.SubscriberCount);
+        Assert.Contains(logs.Entries, entry => entry.Contains(failure.Message, StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnSubAgentsCollectionChanged_NonemptyResetThenQueuedChange_CapturesMembershipAndPreservesRetainedChild(bool removeExisting)
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var retained = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var removed = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var resetChild = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var added = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var source = GetSubAgentItems(chat);
+        source.Add(retained);
+        if (removeExisting) source.Add(removed);
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var retainedSlot = vm.SubAgentsContainer.Slots.Single(slot => slot.AgentId == retained.AgentId);
+        var retainedDisplay = vm.SubAgentDisplays.Single(display => display.AgentId == retained.AgentId);
+        vm.NavigateToAgent(retained.AgentId);
+        var selection = vm.SelectedEditorItem;
+        var published = new List<string>();
+        ((INotifyCollectionChanged)vm.SubAgentDisplays).CollectionChanged += (_, change) =>
+        {
+            if (change.NewItems is not null)
+                published.AddRange(change.NewItems.Cast<IRunningSubAgentDisplay>().Select(display => display.AgentId));
+        };
+        PublishChildNotification(source, [retained, resetChild],
+            new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        OnEngineContext(() =>
+        {
+            source.Remove(resetChild);
+            source.Add(added);
+        });
+        Assert.Equal(removeExisting ? 2 : 1, vm.SubAgentsContainer.Slots.Count);
+        viewer.Drain();
+        await vm.ChildProjectionIdle;
+
+        Assert.Equal(new[] { resetChild.AgentId, added.AgentId }, published);
+        Assert.Equal(new[] { retained.AgentId, added.AgentId }.Order(),
+            vm.SubAgentsContainer.Slots.Select(slot => slot.AgentId).Order());
+        Assert.Same(retainedSlot, vm.SubAgentsContainer.Slots.Single(slot => slot.AgentId == retained.AgentId));
+        Assert.Same(retainedDisplay, vm.SubAgentDisplays.Single(display => display.AgentId == retained.AgentId));
+        Assert.Same(selection, vm.SelectedEditorItem);
+        Assert.DoesNotContain(vm.AllDetailContents, document => document.Key.Contains(resetChild.AgentId, StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnSubAgentsCollectionChanged_MutablePayloads_CopiesReferencesAndOrderBeforeDispatch(bool dispose)
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var retained = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var removed = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var added = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        await using var replaced = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var source = GetSubAgentItems(chat);
+        source.Add(retained);
+        source.Add(removed);
+        using var logs = new ObservableLoggerFactory();
+        var viewer = new SchedulerRecordingCapturingTaskScheduler();
+        var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
+        var retainedSlot = vm.SubAgentsContainer.Slots.Single(slot => slot.AgentId == retained.AgentId);
+        var retainedDisplay = vm.SubAgentDisplays.Single(display => display.AgentId == retained.AgentId);
+        vm.NavigateToAgent(retained.AgentId);
+        var selection = vm.SelectedEditorItem;
+        var changes = new List<(NotifyCollectionChangedAction Action, string AgentId)>();
+        ((INotifyCollectionChanged)vm.SubAgentDisplays).CollectionChanged += (_, change) =>
+        {
+            foreach (IRunningSubAgentDisplay display in change.NewItems ?? change.OldItems!)
+                changes.Add((change.Action, display.AgentId));
+        };
+        var addPayload = new System.Collections.ArrayList { added };
+        PublishChildNotification(source, [retained, removed, added],
+            new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Add, addPayload));
+        addPayload[0] = retained;
+        var removePayload = new System.Collections.ArrayList { removed };
+        PublishChildNotification(source, [retained, added],
+            new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Remove, removePayload));
+        removePayload.Clear();
+        var oldPayload = new System.Collections.ArrayList { added };
+        var newPayload = new System.Collections.ArrayList { replaced };
+        PublishChildNotification(source, [retained, replaced],
+            new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, newPayload, oldPayload));
+        oldPayload[0] = retained;
+        newPayload[0] = removed;
+        Assert.Empty(changes);
+        if (dispose) await vm.DisposeViewResourcesAsync();
+        viewer.Drain();
+        await vm.ChildProjectionIdle;
+
+        if (dispose)
+        {
+            Assert.Empty(changes);
+            Assert.DoesNotContain(vm.SubAgentDisplays, display => display.AgentId == added.AgentId || display.AgentId == replaced.AgentId);
+        }
+        else
+        {
+            Assert.Equal(new[]
+            {
+                (NotifyCollectionChangedAction.Add, added.AgentId),
+                (NotifyCollectionChangedAction.Remove, removed.AgentId),
+                (NotifyCollectionChangedAction.Remove, added.AgentId),
+                (NotifyCollectionChangedAction.Add, replaced.AgentId),
+            }, changes);
+            Assert.Equal(new[] { retained.AgentId, replaced.AgentId }.Order(),
+                vm.SubAgentsContainer.Slots.Select(slot => slot.AgentId).Order());
+            Assert.Same(retainedSlot, vm.SubAgentsContainer.Slots.Single(slot => slot.AgentId == retained.AgentId));
+            Assert.Same(retainedDisplay, vm.SubAgentDisplays.Single(display => display.AgentId == retained.AgentId));
+            Assert.Same(selection, vm.SelectedEditorItem);
+            Assert.Same(replaced, vm.SubAgentsContainer.Slots.Single(slot => slot.AgentId == replaced.AgentId).SubAgentViewModel!.AgentChat);
+        }
+        Assert.DoesNotContain(logs.Entries, entry => entry.Contains("[ERR]", StringComparison.Ordinal));
+        await vm.DisposeViewResourcesAsync();
+    }
+
+    private static void PublishChildNotification(
+        System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> source,
+        IRunningSubAgent[] members,
+        NotifyCollectionChangedEventArgs change)
+    {
+        var items = (IList<IRunningSubAgent>)typeof(System.Collections.ObjectModel.Collection<IRunningSubAgent>)
+            .GetProperty("Items", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(source)!;
+        items.Clear();
+        foreach (var member in members) items.Add(member);
+        OnEngineContext(() => typeof(System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)
+            .GetMethod("OnCollectionChanged",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
+                [typeof(NotifyCollectionChangedEventArgs)])!
+            .Invoke(source, [change]));
+    }
+
+    private static void OnEngineContext(Action action)
+    {
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+        try { action(); }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+    }
+
     [Fact]
     public async Task AddSubAgentSlotLazy_RemovedAndReadmittedBeforeDispatch_RejectsOldAcquisitionGeneration()
     {
@@ -306,24 +502,34 @@ public sealed class AgentViewModelTests
         Assert.Empty(vm.SubAgentsContainer.Slots);
     }
 
-    [Fact]
-    public async Task AddSubAgentSlotEager_PublicationFails_RollsBackDisplayAndDocuments()
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AddSubAgentSlotEager_PublicationFails_RollsBackDisplayAndDocuments(bool cleanupFails)
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         await using var child = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var nested = new DisplayConstructionSubAgent();
+        var remote = new DisplayConstructionSubAgent { Children = [nested] };
+        GetSubAgentItems(child).Add(remote);
+        var runningItem = new AgentChatRunningItem();
+        child.RunningItems.Add(runningItem);
+        var subscriptions = RunningSubAgentDisplayTests.SubscriptionCounts(child, runningItem);
         using var logs = new ObservableLoggerFactory();
         var viewer = new SchedulerRecordingCapturingTaskScheduler();
         var vm = new AgentViewModel(chat, "parent", "", logs, viewer);
         var baseline = vm.AllDetailContents.ToArray();
         var failure = new InvalidOperationException("child document publication failed");
+        var cleanupFailure = new InvalidOperationException("child display cleanup failed");
         var injected = false;
         ((INotifyCollectionChanged)vm.AllDetailContents).CollectionChanged += (_, e) =>
         {
             if (e.Action == NotifyCollectionChangedAction.Add && !injected)
             {
                 injected = true;
+                if (cleanupFails) nested.CleanupFailure = cleanupFailure;
                 throw failure;
             }
         };
@@ -334,7 +540,12 @@ public sealed class AgentViewModelTests
         Assert.Empty(vm.SubAgentDisplays);
         Assert.Empty(vm.SubAgentsContainer.Slots);
         Assert.Equal(baseline, vm.AllDetailContents);
+        Assert.Equal(subscriptions, RunningSubAgentDisplayTests.SubscriptionCounts(child, runningItem));
+        Assert.Equal(0, nested.SubscriberCount);
+        Assert.Equal(0, remote.SubscriberCount);
         Assert.Contains(logs.Entries, entry => entry.Contains(failure.Message, StringComparison.Ordinal));
+        if (cleanupFails)
+            Assert.Contains(logs.Entries, entry => entry.Contains(cleanupFailure.Message, StringComparison.Ordinal));
         await vm.DisposeViewResourcesAsync();
     }
 

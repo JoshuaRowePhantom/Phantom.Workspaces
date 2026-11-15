@@ -68,7 +68,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private long remoteNavigationGeneration;
     private bool isDisposed;
     private readonly object childProjectionLock = new();
-    private readonly Queue<NotifyCollectionChangedEventArgs> childChanges = new();
+    private readonly Queue<(NotifyCollectionChangedEventArgs Change, IRunningSubAgent[]? ResetMembers)> childChanges = new();
     private readonly Dictionary<IRunningSubAgent, long> childMembers = new(ReferenceEqualityComparer.Instance);
     private long childMembershipGeneration;
     private bool childProjectionInitializing = true;
@@ -1117,10 +1117,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             if (this.isDisposed) return;
             if (e.Action == NotifyCollectionChangedAction.Reset)
             {
-                this.childChanges.Enqueue(snapshot);
                 var members = this.agentChat.SubAgents.ToArray();
-                if (members.Length != 0)
-                    this.childChanges.Enqueue(new(NotifyCollectionChangedAction.Add, members));
+                this.childChanges.Enqueue((snapshot, members));
             }
             else
             {
@@ -1134,7 +1132,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     NotifyCollectionChangedAction.Replace => new(e.Action, newItems!, oldItems!),
                     _ => new(NotifyCollectionChangedAction.Move, newItems!, e.NewStartingIndex, e.OldStartingIndex),
                 };
-                this.childChanges.Enqueue(snapshot);
+                this.childChanges.Enqueue((snapshot, null));
             }
         }
         this.ScheduleChildProjection();
@@ -1170,7 +1168,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             while (true)
             {
-                NotifyCollectionChangedEventArgs change;
+                (NotifyCollectionChangedEventArgs Change, IRunningSubAgent[]? ResetMembers) change;
                 lock (this.childProjectionLock)
                 {
                     if (this.isDisposed || this.childChanges.Count == 0)
@@ -1183,7 +1181,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     this.childProjectionActive = true;
                     change = this.childChanges.Dequeue();
                 }
-                this.ApplySubAgentChange(change);
+                this.ApplySubAgentChange(change.Change, change.ResetMembers);
             }
         }
         catch
@@ -1204,25 +1202,23 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         get { lock (this.childProjectionLock) return this.childProjectionIdle.Task; }
     }
 
-    private void ApplySubAgentChange(NotifyCollectionChangedEventArgs e)
+    private void ApplySubAgentChange(
+        NotifyCollectionChangedEventArgs e,
+        IRunningSubAgent[]? resetMembers = null)
     {
         if (e.Action == NotifyCollectionChangedAction.Move) return; // Slots use activity ordering.
         var selectedId = e.Action == NotifyCollectionChangedAction.Replace
             ? this.RootView().SelectedEditorItem?.Id : null;
         if (e.Action == NotifyCollectionChangedAction.Reset)
         {
-            this.childMembers.Clear();
-            this.viewerSubAgents.Clear();
-            foreach (var child in this.remoteChildren.Values.ToArray())
-                this.RemoveRemoteChild(child.Reference.AgentId);
-            foreach (var display in this.remoteSubAgentDisplays.Values)
-            {
-                this.subAgentDisplayItems.Remove(display);
-                if (display is IDisposable disposable) disposable.Dispose();
-            }
-            this.remoteSubAgentDisplays.Clear();
-            foreach (var child in this.subAgentViewModels.ToArray())
-                _ = this.RemoveSubAgentDetailContents(child.AgentChat.Information.AgentId);
+            // Reconcile by reference so surviving children keep their views and selection.
+            var members = resetMembers!;
+            var removed = this.childMembers.Keys.Where(
+                child => !members.Contains(child, ReferenceEqualityComparer.Instance)).ToArray();
+            if (removed.Length != 0)
+                this.ApplySubAgentChange(new(NotifyCollectionChangedAction.Remove, removed));
+            foreach (var child in members)
+                this.AddSubAgentSlot(child);
             return;
         }
 
@@ -1357,17 +1353,34 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
         catch (Exception error)
         {
-            if (display is not null)
-            {
-                this.subAgentDisplayItems.Remove(display);
-                display.Dispose();
-            }
-            if (subAgentViewModel is not null)
-            {
-                _ = this.RemoveSubAgentDetailContents(subAgentChat.AgentId);
-                _ = this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
-            }
             this.logger.LogError(error, "Failed to add sub-agent slot {AgentId}", subAgent.AgentId);
+            try
+            {
+                RunningSubAgentDisplay.ReleaseAll(
+                [
+                    () => { if (display is not null) this.subAgentDisplayItems.Remove(display); },
+                    () => display?.Dispose(),
+                    () =>
+                    {
+                        if (subAgentViewModel is not null)
+                            _ = this.RemoveSubAgentDetailContents(subAgentChat.AgentId);
+                    },
+                    () =>
+                    {
+                        if (subAgentViewModel is not null)
+                            _ = this.DisposeRemovedSubAgentViewModelAsync(subAgentViewModel);
+                    },
+                    () =>
+                    {
+                        this.childMembers.Remove(subAgent);
+                        this.viewerSubAgents.Remove(subAgent);
+                    },
+                ]);
+            }
+            catch (Exception cleanupFailure)
+            {
+                this.logger.LogError(cleanupFailure, "Failed to release staged sub-agent resources {AgentId}", subAgent.AgentId);
+            }
             return false;
         }
     }

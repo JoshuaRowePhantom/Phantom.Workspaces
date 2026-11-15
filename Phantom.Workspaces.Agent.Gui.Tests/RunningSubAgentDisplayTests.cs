@@ -4,12 +4,284 @@ using System.Linq;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class RunningSubAgentDisplayTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteDisplay_LocalStubSnapshot_DoesNotEnumerateLiveEngineChildren(bool materialized)
+    {
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """{"kind":"prompt","name":"test","model":{"id":"test","provider":"echo","apiType":"Echo"},"tools":[]}""");
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = definition });
+        var source = GetSubAgentItems(chat);
+        var published = new DisplayConstructionSubAgent();
+        var first = new DisplayConstructionSubAgent { BeforeReadingChildren = () => source.Add(published) };
+        var second = new DisplayConstructionSubAgent();
+        source.Add(first);
+        source.Add(second);
+        var stub = materialized
+            ? new SubAgent(new AgentSessionId(chat.AgentSessionId), chat, null)
+            : new SubAgent(new AgentSessionId(chat.AgentSessionId), null);
+        var runningItem = CreateRunningItem(chat.RunningItems);
+        var baseline = SubscriptionCounts(chat, runningItem);
+
+        using (var display = new RemoteRunningSubAgentDisplay(stub))
+        {
+            if (materialized)
+            {
+                Assert.Equal(new[] { first.AgentId, second.AgentId },
+                    display.SubAgents.Select(child => child.AgentId));
+                Assert.Equal(3, source.Count);
+            }
+            else Assert.Empty(display.SubAgents);
+            Assert.Equal(baseline, SubscriptionCounts(chat, runningItem));
+        }
+        Assert.Equal(0, first.SubscriberCount);
+        Assert.Equal(0, second.SubscriberCount);
+        Assert.Equal(0, published.SubscriberCount);
+        Assert.Equal(baseline, SubscriptionCounts(chat, runningItem));
+    }
+
+    [Fact]
+    public async Task Constructor_ReentrantEnginePublication_SeedsCapturedReferencesWithoutEnumeratingMutableSource()
+    {
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """{"kind":"prompt","name":"test","model":{"id":"test","provider":"echo","apiType":"Echo"},"tools":[]}""");
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = definition });
+        var source = GetSubAgentItems(chat);
+        var publicationLock = typeof(AgentChat)
+            .GetField("subAgentItemsLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(chat)!;
+        var published = new DisplayConstructionSubAgent();
+        var first = new DisplayConstructionSubAgent
+        {
+            BeforeReadingChildren = () =>
+            {
+                Assert.True(System.Threading.Monitor.IsEntered(publicationLock));
+                source.Add(published);
+            },
+        };
+        var second = new DisplayConstructionSubAgent();
+        source.Add(first);
+        source.Add(second);
+        var runningItem = CreateRunningItem(chat.RunningItems);
+
+        using (var display = new RunningSubAgentDisplay(chat))
+        {
+            Assert.Equal(new[] { first.AgentId, second.AgentId, published.AgentId }.Order(),
+                display.SubAgents.Select(child => child.AgentId).Order());
+            runningItem.Items.Add(TextHistoryItem("captured running-item subscription"));
+            Assert.Single(display.RecentActivity);
+            Assert.Equal(1, first.SubscriberCount);
+            Assert.Equal(1, second.SubscriberCount);
+            Assert.Equal(1, published.SubscriberCount);
+        }
+        Assert.Equal(0, first.SubscriberCount);
+        Assert.Equal(0, second.SubscriberCount);
+        Assert.Equal(0, published.SubscriberCount);
+        Assert.Equal(new[] { 0, 0, 0, 0 }, SubscriptionCounts(chat, runningItem));
+    }
+
+    [Fact]
+    public async Task Dispose_ChildCollectionObserverThrows_ReleasesAllSubscriptionsBeforeReportingFailure()
+    {
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """{"kind":"prompt","name":"test","model":{"id":"test","provider":"echo","apiType":"Echo"},"tools":[]}""");
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = definition });
+        var nested = new DisplayConstructionSubAgent();
+        GetSubAgentItems(chat).Add(nested);
+        var runningItem = CreateRunningItem(chat.RunningItems);
+        var display = new RunningSubAgentDisplay(chat);
+        var failure = new InvalidOperationException("display collection observer failed");
+        ((System.Collections.Specialized.INotifyCollectionChanged)display.SubAgents).CollectionChanged +=
+            (_, _) => throw failure;
+
+        var aggregate = Assert.Throws<AggregateException>(display.Dispose);
+
+        Assert.Contains(failure, aggregate.Flatten().InnerExceptions);
+        Assert.Equal(0, nested.SubscriberCount);
+        Assert.Equal(new[] { 0, 0, 0, 0 }, SubscriptionCounts(chat, runningItem));
+        display.Dispose();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Constructor_RecursiveSeedingFails_UnsubscribesEveryPartialDisplay(bool cleanupFails)
+    {
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """{"kind":"prompt","name":"test","model":{"id":"test","provider":"echo","apiType":"Echo"},"tools":[]}""");
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = definition });
+        var runningItem = CreateRunningItem(chat.RunningItems);
+        var leaf = new DisplayConstructionSubAgent();
+        var nested = new DisplayConstructionSubAgent { Children = [leaf] };
+        var failure = new InvalidOperationException("recursive display construction failed");
+        var cleanupFailure = new InvalidOperationException("nested display cleanup failed");
+        var failing = new DisplayConstructionSubAgent
+        {
+            ConstructionFailure = failure,
+            BeforeReadingChildren = () =>
+            {
+                Assert.Equal(1, nested.SubscriberCount);
+                Assert.Equal(1, leaf.SubscriberCount);
+            },
+        };
+        if (cleanupFails) nested.CleanupFailure = cleanupFailure;
+        var source = GetSubAgentItems(chat);
+        source.Add(nested);
+        source.Add(failing);
+        var before = SubscriptionCounts(chat, runningItem);
+
+        var observed = Record.Exception(() => new RunningSubAgentDisplay(chat));
+
+        if (cleanupFails)
+        {
+            var aggregate = Assert.IsType<AggregateException>(observed).Flatten();
+            Assert.Contains(failure, aggregate.InnerExceptions);
+            Assert.Contains(cleanupFailure, aggregate.InnerExceptions);
+        }
+        else Assert.Same(failure, observed);
+        Assert.Equal(before, SubscriptionCounts(chat, runningItem));
+        Assert.Equal(0, nested.SubscriberCount);
+        Assert.Equal(0, leaf.SubscriberCount);
+        Assert.Equal(0, failing.SubscriberCount);
+        runningItem.Items.Add(TextHistoryItem("must have no retained partial display"));
+        source.Add(new DisplayConstructionSubAgent());
+        Assert.Equal(before, SubscriptionCounts(chat, runningItem));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RemoteConstructor_RecursiveSeedingFails_ReleasesPreviouslyCreatedChildren(bool cleanupFails)
+    {
+        var failure = new InvalidOperationException("remote construction failed");
+        var cleanupFailure = new InvalidOperationException("remote cleanup failed");
+        var leaf = new DisplayConstructionSubAgent { CleanupFailure = cleanupFails ? cleanupFailure : null };
+        var retained = new DisplayConstructionSubAgent();
+        var failing = new DisplayConstructionSubAgent
+        {
+            ConstructionFailure = failure,
+            BeforeReadingChildren = () => Assert.Equal(1, leaf.SubscriberCount),
+        };
+        var source = new DisplayConstructionSubAgent { Children = [leaf, retained, failing] };
+
+        var observed = Record.Exception(() => new RemoteRunningSubAgentDisplay(source));
+
+        if (cleanupFails)
+        {
+            var aggregate = Assert.IsType<AggregateException>(observed).Flatten();
+            Assert.Contains(failure, aggregate.InnerExceptions);
+            Assert.Contains(cleanupFailure, aggregate.InnerExceptions);
+        }
+        else Assert.Same(failure, observed);
+        Assert.Equal(0, source.SubscriberCount);
+        Assert.Equal(0, leaf.SubscriberCount);
+        Assert.Equal(0, retained.SubscriberCount);
+    }
+
+    [Fact]
+    public void RemoteRefresh_RecursiveSeedingFails_KeepsPreviousChildrenAndReleasesStagedChildren()
+    {
+        var failure = new InvalidOperationException("refresh construction failed");
+        var existing = new DisplayConstructionSubAgent();
+        var failing = new DisplayConstructionSubAgent();
+        var source = new DisplayConstructionSubAgent { Children = [existing, failing] };
+        using var display = new RemoteRunningSubAgentDisplay(source);
+        var originalChildren = display.SubAgents;
+        failing.ConstructionFailure = failure;
+
+        Assert.Same(failure, Record.Exception(source.NotifyChanged));
+
+        Assert.Same(originalChildren, display.SubAgents);
+        Assert.Equal(1, existing.SubscriberCount);
+        Assert.Equal(1, failing.SubscriberCount);
+        Assert.Equal(1, source.SubscriberCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RemoteConstructor_SubscriptionFails_UnwindsChildrenAndOriginalFailure(bool cleanupFails)
+    {
+        var failure = new InvalidOperationException("completion subscription failed");
+        var cleanupFailure = new InvalidOperationException("completion unsubscription failed");
+        var nested = new DisplayConstructionSubAgent();
+        var source = new DisplayConstructionSubAgent
+        {
+            Children = [nested],
+            SubscriptionFailure = failure,
+            CleanupFailure = cleanupFails ? cleanupFailure : null,
+        };
+
+        var observed = Record.Exception(() => new RemoteRunningSubAgentDisplay(source));
+
+        if (cleanupFails)
+        {
+            var aggregate = Assert.IsType<AggregateException>(observed).Flatten();
+            Assert.Contains(failure, aggregate.InnerExceptions);
+            Assert.Contains(cleanupFailure, aggregate.InnerExceptions);
+        }
+        else Assert.Same(failure, observed);
+        Assert.Equal(0, source.SubscriberCount);
+        Assert.Equal(0, nested.SubscriberCount);
+    }
+
+    [Fact]
+    public void RemoteDisplay_DisposeIsIdempotentAndUnsubscribesRefreshedChildren()
+    {
+        var nested = new DisplayConstructionSubAgent();
+        var source = new DisplayConstructionSubAgent { Children = [nested] };
+        var display = new RemoteRunningSubAgentDisplay(source);
+        var previous = Assert.Single(display.SubAgents);
+        source.NotifyChanged();
+        Assert.NotSame(previous, Assert.Single(display.SubAgents));
+        Assert.Equal(1, nested.SubscriberCount);
+
+        display.Dispose();
+        display.Dispose();
+        source.NotifyChanged();
+
+        Assert.Empty(display.SubAgents);
+        Assert.Equal(0, nested.SubscriberCount);
+        Assert.Equal(0, source.SubscriberCount);
+    }
+
+    internal static int[] SubscriptionCounts(AgentChat chat, AgentChatRunningItem runningItem)
+    {
+        static int Count(object source, string eventName)
+        {
+            for (var type = source.GetType(); type is not null; type = type.BaseType)
+            {
+                var field = type.GetField(eventName,
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (field is not null) return ((Delegate?)field.GetValue(source))?.GetInvocationList().Length ?? 0;
+            }
+            throw new InvalidOperationException($"Event {eventName} not found.");
+        }
+        return [
+            Count(chat.RunningItems, "CollectionChanged"),
+            Count(runningItem.Items, "CollectionChanged"),
+            Count(chat.SubAgents, "CollectionChanged"),
+            Count(chat, "CompletionStateChanged"),
+        ];
+    }
+
+    private static System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent> GetSubAgentItems(AgentChat chat)
+        => (System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>)typeof(AgentChat)
+            .GetField("subAgentItems", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(chat)!;
+
     private static AgentChatRunningItemCollection CreateRunningItems()
         => new AgentChatRunningItemCollection();
 
