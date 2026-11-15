@@ -145,9 +145,91 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly List<Task> childRetirementTasks = [];
     private ChannelWriter<ChatResponseUpdate>? activeRootWriter;
     private CopilotSdkRootEventQueue? rootEventQueue;
+    private readonly List<Task> admittedSends = [];
     internal const string ConsumeContinuationOptionName = "copilot.sdk.consume-continuation";
     internal event Action? RootContinuationAvailable;
     internal bool HasPendingRootContinuation => this.rootEventQueue?.HasPending == true;
+    internal void SealRootOutput() => this.rootEventQueue?.SealAccepted();
+
+    // Receipt acceptance and the native call's start share one linearization point. The
+    // framework may then append the committed prompt before consuming any routed response.
+    // If that append fails, AgentChat transfers the accepted reader to a drain-only run.
+    internal async Task<CopilotSdkRootBatch> AdmitRootRequestAsync(
+        CopilotSdkRootBatch? reservation,
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        Func<bool> admissionOpen,
+        CancellationToken cancellationToken)
+    {
+        await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (this.rootEventQueue is { } previous
+                && this.currentSessionSignature != ComputeSessionSignatureCore(options, this.workingDirectoryOverride))
+            {
+                previous.SealAccepted();
+                if (reservation?.HasAcceptedOutput == true)
+                    return reservation.AsContinuation();
+                reservation?.Dispose();
+                reservation = null;
+                if (previous.HasPending)
+                    return new(previous, previous.Acquire(true), true);
+            }
+            if (reservation?.HasAcceptedOutput == true)
+                return reservation.AsContinuation();
+            if (!admissionOpen()) throw new OperationCanceledException("Parent request admission stopped.");
+            cancellationToken.ThrowIfCancellationRequested();
+            var session = await this.EnsureSessionAsync(options, cancellationToken).ConfigureAwait(false);
+            var owner = this.rootEventQueue!;
+            if (reservation is not null && !ReferenceEquals(reservation.Owner, owner))
+            {
+                reservation.Dispose();
+                reservation = null;
+            }
+            reservation ??= new(owner, owner.Acquire(false, out var continuation), continuation);
+            if (reservation.HasAcceptedOutput)
+                return reservation.AsContinuation();
+            lock (this.subAgentStateGate)
+                if (this.stateObserverFailure is { } observationFailure)
+                    throw new InvalidOperationException("Copilot session observation failed.", observationFailure);
+            if (!owner.TryStartRequest(reservation.Reader,
+                () => session.SendAsync(BuildMessageOptions(messages), cancellationToken),
+                out var sending, () =>
+                {
+                    if (!admissionOpen()) throw new OperationCanceledException("Parent request admission stopped.");
+                    cancellationToken.ThrowIfCancellationRequested();
+                }))
+                return reservation.AsContinuation();
+            reservation.RequestSend = sending;
+            lock (this.admittedSends)
+            {
+                this.admittedSends.RemoveAll(task => task.IsCompletedSuccessfully);
+                this.admittedSends.Add(ObserveAdmittedSendAsync(sending!, cancellationToken));
+            }
+            return reservation;
+        }
+        finally { this.turnLock.Release(); }
+    }
+
+    private static async Task ObserveAdmittedSendAsync(Task sending, CancellationToken cancellationToken)
+    {
+        try { await sending.ConfigureAwait(false); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    internal async Task RetireAdmittedRequestAsync()
+    {
+        if (this.copilotSession is { } session)
+            await this.AbortAndInvalidateSessionAsync(session, this.currentRouter).ConfigureAwait(false);
+        Task[] sends;
+        lock (this.admittedSends)
+        {
+            sends = this.admittedSends.ToArray();
+            this.admittedSends.Clear();
+        }
+        await CompleteOwnedCleanupAsync(sends.Select<Task, Func<Task>>(task => () => task).ToArray()).ConfigureAwait(false);
+    }
+
     internal CopilotSdkRootBatch? ReserveRootBatch(bool continuation)
     {
         if (this.copilotSession is null) return null;
@@ -1495,6 +1577,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             async () => { await this.WaitForSteeringDeliveriesAsync().ConfigureAwait(false); },
             async () =>
             {
+                Task[] sends;
+                lock (this.admittedSends) sends = this.admittedSends.ToArray();
+                await CompleteOwnedCleanupAsync(sends.Select<Task, Func<Task>>(task => () => task).ToArray()).ConfigureAwait(false);
+            },
+            async () =>
+            {
                 Task[] retirements;
                 lock (this.subAgentStateGate) retirements = this.childRetirementTasks.ToArray();
                 // Await separately so independently failing retirements retain their identities.
@@ -1640,13 +1728,27 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         var outputDrain = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkOutputDrain.OptionName) as CopilotSdkOutputDrain;
         var admittedBatch = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkRootBatch.OptionName) as CopilotSdkRootBatch;
         var messageOptions = continuation ? null : BuildMessageOptions(messages);
-        var promptSent = false;
+        var preparedSend = admittedBatch?.RequestSend;
+        var promptSent = preparedSend is not null;
+        Exception? preparedSendFailure = null;
+        if (preparedSend is not null)
+        {
+            try { await preparedSend.ConfigureAwait(false); }
+            catch (Exception failure)
+            {
+                preparedSendFailure = failure;
+                admittedBatch!.Owner.SealAccepted();
+                outputDrain?.RequestStop();
+            }
+        }
         do
         {
             await foreach (var update in this.RunStreamingTurnAsync(BeginTurnAsync, cancellationToken, outputDrain).ConfigureAwait(false))
                 yield return update;
         } while ((!continuation && !promptSent && outputDrain?.StopRequested != true)
             || (outputDrain?.StopRequested == true && this.rootEventQueue?.HasPending == true));
+        if (preparedSendFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(preparedSendFailure).Throw();
 
         // Establishing the turn (resolving the session, creating the channel, and subscribing to
         // session events) happens inside the turn lock because RunStreamingTurnAsync invokes this
@@ -1753,7 +1855,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
             var rootEvents = this.rootEventQueue
                 ?? throw new InvalidOperationException("Copilot session has no root event receipt queue.");
-            var acquiredContinuation = admittedBatch?.HasAcceptedOutput ?? false;
+            var acquiredContinuation = admittedBatch?.IsContinuation ?? false;
             var eventReader = admittedBatch?.Reader;
             if (admittedBatch is not null && !ReferenceEquals(admittedBatch.Owner, rootEvents))
                 throw new InvalidOperationException("The admitted Copilot batch belongs to a different session receipt queue.");
@@ -1853,7 +1955,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 subscription,
                 async _ =>
                 {
-                    if (continuation || acquiredContinuation) return;
+                    if (continuation || acquiredContinuation || promptSent) return;
                     cancellationToken.ThrowIfCancellationRequested();
                     await session.SendAsync(messageOptions!, cancellationToken).ConfigureAwait(false);
                     promptSent = true;

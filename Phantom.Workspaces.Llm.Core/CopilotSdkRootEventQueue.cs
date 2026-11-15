@@ -3,13 +3,23 @@ using System.Threading.Channels;
 
 namespace Phantom.Workspaces.Llm;
 
-internal sealed record CopilotSdkRootBatch(
-    CopilotSdkRootEventQueue Owner, ChannelReader<SessionEvent> Reader, bool IsContinuation)
+internal sealed class CopilotSdkRootBatch(
+    CopilotSdkRootEventQueue owner, ChannelReader<SessionEvent> reader, bool continuation)
     : IDisposable
 {
     internal const string OptionName = "copilot.sdk.admitted-root-batch";
     private int consumed;
-    internal bool HasAcceptedOutput => this.IsContinuation || this.Reader.TryPeek(out _);
+    internal CopilotSdkRootEventQueue Owner { get; } = owner;
+    internal ChannelReader<SessionEvent> Reader { get; } = reader;
+    internal bool IsContinuation { get; private set; } = continuation;
+    internal bool WasTaken => Volatile.Read(ref this.consumed) != 0;
+    internal Task? RequestSend { get; set; }
+    internal bool HasAcceptedOutput => this.RequestSend is not null || this.IsContinuation || this.Reader.TryPeek(out _);
+    internal CopilotSdkRootBatch AsContinuation()
+    {
+        this.IsContinuation = true;
+        return this;
+    }
     internal ChannelReader<SessionEvent> Take()
     {
         if (Interlocked.Exchange(ref this.consumed, 1) != 0)
@@ -182,6 +192,24 @@ internal sealed class CopilotSdkRootEventQueue
             this.sealedForDrain = true;
             this.receiving?.Writer.TryComplete();
             this.receiving = null;
+        }
+    }
+
+    // The native invocation starts under the receipt gate, without awaiting under the lock.
+    // Before this transition output belongs to the preceding request; afterwards the reserved
+    // reader owns the new request. No prompt may be published before this decision.
+    internal bool TryStartRequest(ChannelReader<SessionEvent> reader, Func<Task> send, out Task? sending, Action? verifyAdmission = null)
+    {
+        lock (this.gate)
+        {
+            sending = null;
+            if (reader.TryPeek(out _) || this.pending.Count > 0) return false;
+            if (this.stopped || this.sealedForDrain)
+                throw new OperationCanceledException("Fresh Copilot admission has stopped.");
+            verifyAdmission?.Invoke();
+            try { sending = send(); }
+            catch (Exception failure) { sending = Task.FromException(failure); }
+            return true;
         }
     }
 

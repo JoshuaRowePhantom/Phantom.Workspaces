@@ -7,6 +7,64 @@ public sealed class CopilotSdkRootEventQueueTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task RequestStart_LinearizesAgainstLateAcceptedOutput(bool outputFirst)
+    {
+        var queue = new CopilotSdkRootEventQueue();
+        var reader = queue.Acquire(false);
+        var accepted = new AssistantMessageEvent { Data = new() { MessageId = "accepted", Content = "accepted" } };
+        if (outputFirst) queue.Accept(accepted);
+        var sends = 0;
+        var started = queue.TryStartRequest(reader, () =>
+        {
+            sends++;
+            queue.Accept(accepted);
+            return Task.CompletedTask;
+        }, out var sending);
+        Assert.Equal(!outputFirst, started);
+        Assert.Equal(outputFirst ? 0 : 1, sends);
+        Assert.Equal(outputFirst, sending is null);
+        Assert.Same(accepted, await reader.ReadAsync());
+        queue.SealAccepted();
+        queue.Stop();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RequestStart_AfterSealOrCancelledAdmission_DoesNotInvokeNativeSend(bool sealedQueue)
+    {
+        var queue = new CopilotSdkRootEventQueue();
+        var reader = queue.Acquire(false);
+        if (sealedQueue) queue.SealAccepted();
+        var sends = 0;
+        Assert.ThrowsAny<OperationCanceledException>(() => queue.TryStartRequest(reader,
+            () => { sends++; return Task.CompletedTask; }, out _,
+            () => throw new OperationCanceledException("admission cancelled")));
+        Assert.Equal(0, sends);
+        queue.Release(reader);
+        queue.Stop();
+    }
+
+    [Fact]
+    public async Task RequestStart_SynchronousNativeFailure_HasOneOwnedObservableTask()
+    {
+        var queue = new CopilotSdkRootEventQueue();
+        var batch = new CopilotSdkRootBatch(queue, queue.Acquire(false), false);
+        var original = new IOException("native send failed");
+        Assert.True(queue.TryStartRequest(batch.Reader, () => throw original, out var sending));
+        batch.RequestSend = sending;
+        Assert.True(batch.HasAcceptedOutput);
+        Assert.Same(original, await Assert.ThrowsAsync<IOException>(() => sending!));
+        Assert.Same(batch, batch.AsContinuation());
+        Assert.Same(batch.Reader, batch.Take());
+        batch.Dispose();
+        queue.Release(batch.Reader);
+        queue.Stop();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task UnconsumedAdmission_ReturnsAcceptedReaderBeforeLaterBatches(bool acceptedBeforeReservation)
     {
         var queue = new CopilotSdkRootEventQueue();

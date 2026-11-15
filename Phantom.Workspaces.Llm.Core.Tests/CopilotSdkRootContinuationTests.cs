@@ -13,6 +13,125 @@ public sealed class CopilotSdkRootContinuationTests
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ParentDispose_RequestAppendFailsAfterNativeAdmission_DrainsBothAcceptedBatchesWithoutRetry(
+        bool disposeBeforeFailure, bool nativeSendFails)
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var original = new IOException("ambiguous request append");
+        var nativeFailure = new InvalidOperationException("independent native admission failure");
+        native.SendHandler = (_, _) => nativeSendFails ? Task.FromException(nativeFailure) : Task.CompletedTask;
+        var attempts = 0;
+        var store = new SerializedStore
+        {
+            BeforeWriteAsync = async request =>
+            {
+                if (request.NewMessages?.Any(message => message.Text == "request") != true) return;
+                attempts++;
+                entered.TrySetResult();
+                await release.Task;
+                throw original;
+            },
+        };
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(), AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ClientOverride = sdk, ForegroundScheduler = scheduler.ExclusiveScheduler,
+            AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+        });
+        native.Sending = _ =>
+        {
+            EmitTaskFinal(native, "first", "first owned final");
+            EmitTaskFinal(native, "second", "second owned final");
+        };
+        Task? disposal = null;
+        try
+        {
+            var input = chat.EnqueueUserMessageWithCompletion("request");
+            await entered.Task;
+            if (disposeBeforeFailure) disposal = chat.DisposeAsync().AsTask();
+            release.TrySetResult();
+            await Assert.ThrowsAsync<IOException>(() => input.Settlement);
+            disposal ??= chat.DisposeAsync().AsTask();
+            var failure = await Assert.ThrowsAsync<AggregateException>(() => disposal);
+            Assert.Contains(failure.Flatten().InnerExceptions, error => ReferenceEquals(error, original));
+            if (nativeSendFails)
+                Assert.Contains(failure.Flatten().InnerExceptions, error => ReferenceEquals(error, nativeFailure));
+            var messages = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+            Assert.Single(messages, message => message.Text == "first owned final");
+            Assert.Single(messages, message => message.Text == "second owned final");
+            Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "second owned final");
+            Assert.Equal(1, native.SendAsyncCallCount);
+            Assert.Equal(1, attempts);
+            Assert.Equal(0, native.SubscriberCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (disposal is not null) await disposal.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+            else await chat.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task NativeAdmissionSendFails_RetainsAcceptedBatchesAndExactIndependentCleanupFailures()
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var original = new IOException("native send original failure");
+        var independent = new InvalidOperationException("independent resource original failure");
+        native.SendHandler = (_, _) => Task.FromException(original);
+        native.Sending = _ =>
+        {
+            EmitTaskFinal(native, "first", "first owned final");
+            EmitTaskFinal(native, "second", "second owned final");
+        };
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        var store = new SerializedStore();
+        var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(), AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ClientOverride = sdk, ForegroundScheduler = scheduler.ExclusiveScheduler,
+            AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+        });
+        var resource = new FailingResource(independent);
+        chat.RegisterOwnedResource(resource);
+        var input = chat.EnqueueUserMessageWithCompletion("request");
+        Assert.Same(original, await Assert.ThrowsAsync<IOException>(() => input.Settlement));
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => chat.DisposeAsync().AsTask());
+        Assert.Equal<Exception>([original, independent], failure.Flatten().InnerExceptions);
+        var messages = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+        Assert.Single(messages, message => message.Text == "first owned final");
+        Assert.Single(messages, message => message.Text == "second owned final");
+        Assert.Equal(1, native.SendAsyncCallCount);
+        Assert.Equal(1, resource.Calls);
+        Assert.Equal(0, native.SubscriberCount);
+    }
+
+    [Fact]
+    public async Task ParentDispose_DrainsStillPendingAcceptedBatchBeforeResourceTeardown()
+    {
+        var store = new SerializedStore();
+        await CopilotSdkRetirementPersistenceScenario.RunPendingShutdownAsync(() => store);
+    }
+
+    [Fact]
+    public async Task AgentChat_ContinuationAfterReservationBeforeSend_PrecedesDeferredPrompt()
+    {
+        var store = new SerializedStore();
+        await CopilotSdkRetirementPersistenceScenario.RunAdmissionAsync(() => store, true, true);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
     [InlineData(true, true)]
     public async Task AgentChat_ConfigChangeAfterAdmission_DrainsAcceptedBatchesAndSendsNewPromptOnce(bool lateAcceptedBatches, bool revertDuringDrain)
     {
@@ -41,7 +160,6 @@ public sealed class CopilotSdkRootContinuationTests
         await initial;
         var initialHistory = chat.History.ToArray();
         chat.UpdateParameterValues(new Dictionary<string, string> { ["working-directory"] = Path.GetFullPath(".") });
-        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = false;
         ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
         {
@@ -54,11 +172,11 @@ public sealed class CopilotSdkRootContinuationTests
                     EmitTaskFinal(native, "late-two", "late accepted two");
                 }
             }
-            else if (started && chat.RunningItems.Count == 0) stopped.TrySetResult();
         };
         native.Sending = count => { if (count == 2) EmitTaskFinal(native, "new", "new final"); };
+        var stopped = WhenSettled(chat, "new final");
         chat.EnqueueUserMessage("new request");
-        await stopped.Task;
+        await stopped;
         Assert.Equal(2, native.SendAsyncCallCount);
         Assert.Single(native.ResumeSessionCalls);
         var messages = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
@@ -72,6 +190,10 @@ public sealed class CopilotSdkRootContinuationTests
         {
             Assert.Single(messages, message => message.Text == "late accepted one");
             Assert.Single(messages, message => message.Text == "late accepted two");
+            Assert.True(Array.FindIndex(messages, message => message.Text == "late accepted two")
+                < Array.FindIndex(messages, message => message.Text == "new request"));
+            var live = chat.History.SelectMany(item => item.Contents).OfType<TextContent>().Select(text => text.Text).ToArray();
+            Assert.True(Array.IndexOf(live, "late accepted two") < Array.IndexOf(live, "new request"));
         }
         Assert.DoesNotContain(chat.History.SelectMany(item => item.Contents), content => content is ErrorContent);
     }
@@ -375,13 +497,21 @@ public sealed class CopilotSdkRootContinuationTests
     }
 
     [Theory]
-    [InlineData("replace-me")]
-    [InlineData(null)]
-    [InlineData("")]
-    public async Task AgentChat_FinalReplacement_ReconcilesAlreadyPersistedAndPromotedMessageInPlace(string? nativeMessageId)
+    [InlineData("replace-me", "full replacement")]
+    [InlineData(null, "full replacement")]
+    [InlineData("", "full replacement")]
+    [InlineData("replace-me", "draft completed")]
+    [InlineData(null, "draft completed")]
+    [InlineData("", "draft completed")]
+    [InlineData("replace-me", "full replacement", 1)]
+    [InlineData("replace-me", "full replacement", 2)]
+    [InlineData("replace-me", "draft completed", 1)]
+    [InlineData("replace-me", "draft completed", 2)]
+    public async Task AgentChat_FinalReplacement_ReconcilesAlreadyPersistedAndPromotedMessageInPlace(string? nativeMessageId, string finalText, int steering = 0)
     {
         var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
-        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        var steeringQueue = new AgentInputQueueManager();
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null, queueManager: steeringQueue);
         client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
         var store = new InMemoryAgentPersistenceStore();
         var scheduler = new ConcurrentExclusiveSchedulerPair();
@@ -392,11 +522,11 @@ public sealed class CopilotSdkRootContinuationTests
             ConfiguredStore = store, ClientOverride = client, ForegroundScheduler = scheduler.ExclusiveScheduler,
             AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
         });
-        var promoted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var promoted = new TaskCompletionSource<AgentChatHistoryItem>(TaskCreationOptions.RunContinuationsAsynchronously);
         ((System.Collections.Specialized.INotifyCollectionChanged)chat.History).CollectionChanged += (_, _) =>
         {
-            if (chat.History.Any(item => item.Contents.OfType<TextContent>().Any(content => content.Text == "draft")))
-                promoted.TrySetResult();
+            var draft = chat.History.SingleOrDefault(item => item.Contents.OfType<TextContent>().Any(content => content.Text == "draft"));
+            if (draft is not null) promoted.TrySetResult(draft);
         };
         native.EnqueueEvent(new AssistantMessageDeltaEvent { Data = new() { MessageId = nativeMessageId!, DeltaContent = "draft" } });
         native.EnqueueEvent(new ToolExecutionStartEvent { Data = new() { ToolCallId = "read", ToolName = "read" } });
@@ -409,27 +539,40 @@ public sealed class CopilotSdkRootContinuationTests
             else if (started) completed.TrySetResult();
         };
         chat.EnqueueUserMessage("request");
-        await promoted.Task;
-        var livePrefix = Assert.Single(chat.History, item => item.Contents.OfType<TextContent>().Any(content => content.Text == "draft"));
+        var livePrefix = await promoted.Task;
         var prefix = Assert.Single(await store.ReadMessagesAsync(new() { AgentSessionId = product }), message => message.Text == "draft");
         Assert.False(string.IsNullOrEmpty(prefix.MessageId));
         Assert.Equal(livePrefix.MessageId, prefix.MessageId);
         if (!string.IsNullOrEmpty(nativeMessageId)) Assert.Equal(nativeMessageId, prefix.MessageId);
-        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = nativeMessageId!, Content = "full replacement" } });
-        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = nativeMessageId!, Content = "full replacement" } });
+        var steeringFailure = new InvalidOperationException("synthetic delivery failure");
+        if (steering != 0)
+        {
+            native.SendHandler = (_, _) => steering == 2 ? Task.FromException(steeringFailure) : Task.CompletedTask;
+            steeringQueue.Enqueue(steeringQueue.ImmediateQueue,
+                [new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "interstitial steering")] }]);
+            var outcomes = await client.WaitForSteeringDeliveriesAsync();
+            var outcome = Assert.Single(outcomes);
+            Assert.Equal(steering == 1, outcome.Delivered);
+            if (steering == 2) Assert.Same(steeringFailure, outcome.Failure);
+        }
+        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = nativeMessageId!, Content = finalText } });
+        native.Emit(new AssistantMessageEvent { Data = new() { MessageId = nativeMessageId!, Content = finalText } });
         native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "other", Content = "distinct final" } });
         native.Emit(new SessionIdleEvent { Data = new() });
         await completed.Task;
         var messages = await store.ReadMessagesAsync(new() { AgentSessionId = product });
         var replacement = Assert.Single(messages, message => message.MessageId == prefix.MessageId);
-        Assert.Equal("full replacement", replacement.Text);
+        Assert.Equal(finalText, replacement.Text);
         Assert.Equal(prefix.CreatedAt, replacement.CreatedAt);
         var liveReplacement = Assert.Single(chat.History, item => item.MessageId == prefix.MessageId);
         Assert.Equal(livePrefix.Timestamp, liveReplacement.Timestamp);
         Assert.Equal(livePrefix.AssistantRunId, liveReplacement.AssistantRunId);
-        Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "full replacement");
-        Assert.DoesNotContain(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text.Contains("draft"));
+        Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == finalText);
+        Assert.DoesNotContain(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(), text => text.Text == "draft");
         Assert.Single(messages, message => message.MessageId == "other");
+        Assert.Equal(steering == 0 ? 1 : 2, native.SendAsyncCallCount);
+        if (steering != 0) Assert.Single(chat.History, item => item.Role == ChatRole.User && item.Contents.OfType<TextContent>().Any(text => text.Text == "interstitial steering"));
+        Assert.Equal(steering == 2, chat.History.SelectMany(item => item.Contents).OfType<ErrorContent>().Any());
     }
 
     [Fact]

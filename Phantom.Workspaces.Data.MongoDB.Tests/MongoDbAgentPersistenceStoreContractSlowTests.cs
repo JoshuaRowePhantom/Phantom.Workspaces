@@ -80,13 +80,55 @@ public sealed class MongoDbAgentPersistenceStoreContractSlowTests : AgentPersist
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AgentChat_AcceptedOutputAdmission_RealMongoPreservesEncounterOrderAndFreshRestore(bool continuationBoundary)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task AgentChat_AcceptedOutputAdmission_RealMongoPreservesEncounterOrderAndFreshRestore(bool continuationBoundary, bool afterReservation = false)
     {
         await this.ResetStoreAsync();
         var productId = await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunAdmissionAsync(
-            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"), continuationBoundary);
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"), continuationBoundary, afterReservation);
+        var messages = await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId });
+        await this.AssertUniqueSequencesAsync(productId, messages.Length);
+    }
+
+    [Fact]
+    public async Task AgentChat_PendingAcceptedShutdown_RealMongoDrainsBothBatches()
+    {
+        await this.ResetStoreAsync();
+        var productId = await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunPendingShutdownAsync(
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"));
+        var messages = await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId });
+        await this.AssertUniqueSequencesAsync(productId, messages.Length);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(false, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 1)]
+    [InlineData(true, 2)]
+    public async Task AgentChat_AuthoritativeFinalAfterPromotion_RealMongoPreservesDocumentIdentityAndSequence(
+        bool prefixExtension, int steering)
+    {
+        await this.ResetStoreAsync();
+        var collection = this._fixture.Database.GetCollection<BsonDocument>("contract-test-agent-persistence-messages");
+        BsonDocument? original = null;
+        async Task<BsonDocument> ReadCorrectedDocumentAsync()
+        {
+            var documents = await collection.Find(FilterDefinition<BsonDocument>.Empty).ToListAsync();
+            return Assert.Single(documents, document => document.Elements.Any(element =>
+                element.Name.Equals("MessageId", StringComparison.OrdinalIgnoreCase) && element.Value == "corrected"));
+        }
+        var productId = await Phantom.Workspaces.Llm.Core.Tests.CopilotSdkRetirementPersistenceScenario.RunCorrectionAsync(
+            () => new MongoDbAgentPersistenceStore(this._fixture.Database, "contract-test-agent-persistence"),
+            prefixExtension, steering, async () => { original = await ReadCorrectedDocumentAsync(); });
+        var corrected = await ReadCorrectedDocumentAsync();
+        Assert.NotNull(original);
+        Assert.Equal(original["_id"], corrected["_id"]);
+        var sequenceName = original.Names.Single(name => name.Equals("Sequence", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(original[sequenceName], corrected[sequenceName]);
         var messages = await (await this.CreateStoreAsync()).ReadMessagesAsync(new() { AgentSessionId = productId });
         await this.AssertUniqueSequencesAsync(productId, messages.Length);
     }

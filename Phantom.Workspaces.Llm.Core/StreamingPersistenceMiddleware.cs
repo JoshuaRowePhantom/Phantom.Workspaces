@@ -28,6 +28,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
 
     internal event Action<ChatMessage>? MessagePersisted;
     internal event Action<ChatResponseUpdate>? AcceptedUpdateRecovered;
+    internal StreamingAggregationWork? AggregationWork { get; private set; }
 
     public StreamingPersistenceMiddleware(
         IChatClient inner,
@@ -65,22 +66,10 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             cancellationToken = owningCancellation;
         var admittedBatch = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkRootBatch.OptionName) as CopilotSdkRootBatch;
         if (admittedBatch?.HasAcceptedOutput != true) cancellationToken.ThrowIfCancellationRequested();
-        // #1327: The per-update `ToChatResponse()` coalescing (a full text concatenation + fresh
-        // char[] allocation over the whole growing buffer) and the persistence-store I/O are pure
-        // compute / I/O. When this middleware is pumped from the Avalonia UI thread (the process
-        // loop resumes on the foreground scheduler by design), running that work synchronously on
-        // the caller's thread blocks input, rendering and animation for the duration of the stream.
-        //
-        // Offload each update's coalescing + persistence onto the thread pool via Task.Run so it
-        // never runs on the caller's (potentially UI) SynchronizationContext. The enumeration stays
-        // strictly one-update-per-consumer-pull (rather than an eager background pump), which both
-        // preserves the incremental-persistence cadence and the ordering invariant (each stable
-        // message is persisted before its triggering update is yielded to the consumer), and keeps
-        // back-pressure identical to the previous synchronous implementation. Only the pure
-        // compute / I/O moves off-thread; the consumer's own MoveNextAsync continuation still
-        // resumes on whatever context it prefers (in the GUI host, the foreground scheduler), so
-        // the binding-affecting view-model mutations downstream remain on the foreground context.
-        var buffer = new List<ChatResponseUpdate>();
+        // Keep pure aggregation and store I/O off the foreground, with one pull's back-pressure.
+        // The cursor visits each newly stable message once; only authoritative identity
+        // corrections materialize a previously persisted message again.
+        var accumulator = new StreamingResponseAccumulator(TimeProvider.System);
         var persistedCount = 0;
         var persistenceFailed = false;
         var persistedById = new Dictionary<string, ChatMessage>(StringComparer.Ordinal);
@@ -165,15 +154,15 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             {
                 // This buffer and the provider's sealed accepted suffix have the same owner.
                 // An ambiguous failed append must never be retried during cleanup.
-                if (!persistenceFailed && buffer.Count > 0)
+                if (!persistenceFailed && accumulator.Count > 0)
                     await Task.Run(async () =>
                     {
-                        var finalMessages = buffer.ToChatResponse().Messages;
-                        for (var i = persistedCount; i < finalMessages.Count; i++)
-                            await PersistNextAsync(finalMessages[i]).ConfigureAwait(false);
+                        while (persistedCount < accumulator.Count)
+                            await PersistNextAsync(accumulator.GetMessage(persistedCount)).ConfigureAwait(false);
                     }, CancellationToken.None).ConfigureAwait(false);
             }).ConfigureAwait(false);
             await CaptureCleanupAsync(async () => await enumerator.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+            this.AggregationWork = accumulator.Measure();
             if (cleanupFailures.Count > 0)
             {
                 var failures = new List<Exception>();
@@ -209,39 +198,20 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
                     AgentDefinitionJson = agent.AgentDefinitionJson?.DeepClone().AsBsonDocument,
                 };
             }
-            buffer.Add(update);
-            var replacement = RootTextReconciliation.IsReplacement(update.Contents);
-            if (replacement)
+            accumulator.Add(update);
+            foreach (var index in accumulator.TakeChangedIndices())
             {
-                var normalized = RootTextReconciliation.Normalize(buffer, value => value.MessageId,
-                    value => value.Contents, (value, contents) => new ChatResponseUpdate
-                    {
-                        Role = value.Role, AuthorName = value.AuthorName, MessageId = value.MessageId,
-                        CreatedAt = value.CreatedAt, FinishReason = value.FinishReason, Contents = contents,
-                    });
-                buffer.Clear();
-                buffer.AddRange(normalized);
-            }
-            var response = buffer.ToChatResponse();
-            if (replacement && update.MessageId is { } replacedId
-                && persistedById.TryGetValue(replacedId, out var previous))
-            {
-                var corrected = response.Messages.Single(message => message.MessageId == replacedId);
-                corrected.CreatedAt = previous.CreatedAt;
+                if (index >= persistedCount) continue;
+                var corrected = accumulator.GetMessage(index);
+                if (corrected.MessageId is { } id && persistedById.TryGetValue(id, out var previous))
+                    corrected.CreatedAt = previous.CreatedAt;
                 await PersistNextAsync(corrected, replacement: true).ConfigureAwait(false);
             }
             var stableCount = update.FinishReason is not null
-                ? response.Messages.Count
-                : Math.Max(0, response.Messages.Count - 1);
+                ? accumulator.Count
+                : Math.Max(0, accumulator.Count - 1);
             for (var i = persistedCount; i < stableCount; i++)
-                await PersistNextAsync(response.Messages[i]).ConfigureAwait(false);
-            if (update.FinishReason is not null)
-            {
-                // An autonomous batch can precede a new request in one enumeration.
-                // Its durable final must not absorb the next task.
-                buffer.Clear();
-                persistedCount = 0;
-            }
+                await PersistNextAsync(accumulator.GetMessage(i)).ConfigureAwait(false);
         }
 
         async ValueTask PersistNextAsync(ChatMessage message, bool replacement = false)

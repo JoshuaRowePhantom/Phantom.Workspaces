@@ -216,8 +216,8 @@ public sealed class CopilotSdkStreamAdapterTests
             Data = new() { Content = "accepted answer", MessageId = "message-1" },
         });
 
-        Assert.Equal("accepted answer",
-            string.Concat(updates.SelectMany(update => update.Contents).OfType<TextContent>().Select(content => content.Text)));
+        Assert.Equal("accepted answer", updates[^1].Text);
+        Assert.Equal(prefix.Length > 0, RootTextReconciliation.IsReplacement(updates[^1].Contents));
     }
 
     [Fact]

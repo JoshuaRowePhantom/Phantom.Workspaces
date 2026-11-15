@@ -271,14 +271,21 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 Assert.Contains("\"collapsed\":true", result, StringComparison.Ordinal);
                 if (acceptedCancellation)
                 {
-                    Assert.Equal("true", await EvalAsync(browser, """
+                    var cancellationDom = await EvalAsync(browser, """
                         (() => {
                           const text = document.body.textContent;
-                          return !text.includes('draft parent') && text.includes('accepted old result')
-                            && text.indexOf('durable parent final') < text.indexOf('Interrupted by user.')
-                            && text.indexOf('Interrupted by user.') < text.indexOf('next durable prompt');
+                          return {
+                            noDraft: !text.includes('draft parent'),
+                            result: text.includes('accepted old result'),
+                            beforeInterrupt: text.indexOf('durable parent final') < text.indexOf('Interrupted by user.'),
+                            beforeNext: text.indexOf('Interrupted by user.') < text.indexOf('next durable prompt')
+                          };
                         })()
-                        """));
+                        """);
+                    Assert.True(cancellationDom.Contains("\"noDraft\":true", StringComparison.Ordinal), cancellationDom);
+                    Assert.Contains("\"result\":true", cancellationDom, StringComparison.Ordinal);
+                    Assert.Contains("\"beforeInterrupt\":true", cancellationDom, StringComparison.Ordinal);
+                    Assert.Contains("\"beforeNext\":true", cancellationDom, StringComparison.Ordinal);
                     var durable = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
                     Assert.Single(durable, message => message.MessageId == "answer" && message.Text == "durable parent final");
                 }
@@ -305,6 +312,109 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 store.Release.TrySetResult();
                 window.Close();
             }
+        });
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public Task AgentChatOutputControl_AuthoritativeFinalAfterPromotionAndSteering_UpdatesSameVisibleMessage(
+        bool prefixExtension, bool failedSteering)
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+            var steeringQueue = new AgentInputQueueManager();
+            var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null, queueManager: steeringQueue);
+            sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+            var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            native.Sending = count => { if (count == 1) sent.TrySetResult(); };
+            var failure = new InvalidOperationException("synthetic steering failure");
+            native.SendHandler = (options, _) => options.Mode == "immediate" && failedSteering
+                ? Task.FromException(failure) : Task.CompletedTask;
+            var store = new InMemoryAgentPersistenceStore();
+            await using var chat = await AgentChat.CreateAsync(new()
+            {
+                AgentDefinition = CreateAgentDefinition(), ConfiguredStore = store, ClientOverride = sdk,
+                ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+                AgentServices = new() { RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory() },
+            });
+            using var loggerFactory = new ObservableLoggerFactory();
+            await using var viewModel = new AgentViewModel(chat, "correction-root", "", loggerFactory, TaskScheduler.Default);
+            using var status = new AgentChatStatusLineViewModel(viewModel);
+            var control = new AgentChatOutputControl { DataContext = viewModel };
+            var browser = GetBrowser(control);
+            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            browser.Ready += (_, _) => ready.TrySetResult();
+            var window = CreateOffscreenWindow(control);
+            try
+            {
+                window.Show();
+                await ready.Task;
+                await control.HistoryLoaded;
+                chat.EnqueueUserMessage("correction request");
+                await sent.Task;
+                var streamed = WhenChatStateAsync(chat, () => chat.RunningItems.Any(run =>
+                    run.Items.Any(item => item.MessageId == "answer" && item.Contents.OfType<TextContent>().Any(text => text.Text == "draft"))));
+                native.Emit(new AssistantMessageDeltaEvent { Data = new() { MessageId = "answer", DeltaContent = "draft" } });
+                await streamed;
+                Assert.True(status.IsThinking);
+                browser.EndBatch();
+                Assert.Equal("true", await EvalAsync(browser, "!!document.querySelector('.chat-running-item')?.textContent.includes('draft')"));
+                var promoted = WhenChatStateAsync(chat, () => chat.History.Any(item => item.MessageId == "answer"));
+                native.Emit(new ToolExecutionStartEvent { Data = new() { ToolCallId = "intervening-task", ToolName = "task" } });
+                native.Emit(new ToolExecutionCompleteEvent { Data = new() { ToolCallId = "intervening-task", Success = true, Result = new() { Content = "intervening task result" } } });
+                await promoted;
+                var original = Assert.Single(chat.History, item => item.MessageId == "answer");
+                steeringQueue.Enqueue(steeringQueue.ImmediateQueue,
+                    [new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "interstitial steering")] }]);
+                var outcome = Assert.Single(await sdk.WaitForSteeringDeliveriesAsync());
+                Assert.Equal(!failedSteering, outcome.Delivered);
+                if (failedSteering) Assert.Same(failure, outcome.Failure);
+                var finalText = prefixExtension ? "draft completed" : "authoritative final";
+                var settled = WhenChatStateAsync(chat, () => chat.RunningItems.Count == 0
+                    && chat.History.Any(item => item.MessageId == "answer" && item.Contents.OfType<TextContent>().Any(text => text.Text == finalText)));
+                native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = finalText } });
+                native.Emit(new AssistantMessageEvent { Data = new() { MessageId = "answer", Content = finalText } });
+                native.Emit(new SessionIdleEvent { Data = new() });
+                await settled;
+                Assert.False(status.IsThinking);
+                var corrected = Assert.Single(chat.History, item => item.MessageId == "answer");
+                Assert.Equal(original.Timestamp, corrected.Timestamp);
+                Assert.Equal(original.AssistantRunId, corrected.AssistantRunId);
+                var durable = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+                Assert.Equal(finalText, Assert.Single(durable, message => message.MessageId == "answer").Text);
+                Assert.Equal(2, native.SendAsyncCallCount);
+                Assert.Equal(failedSteering, chat.History.SelectMany(item => item.Contents).OfType<ErrorContent>().Any());
+                browser.EndBatch();
+                var finalJson = System.Text.Json.JsonSerializer.Serialize(finalText);
+                Assert.Equal("true", await EvalAsync(browser, $$"""
+                    (() => {
+                      document.querySelectorAll('details').forEach(node => node.open = false);
+                      const messages = [...document.querySelectorAll('[id^="history-"]')].filter(node => /^history-\d+$/.test(node.id));
+                      const matches = messages.filter(node => node.textContent.includes({{finalJson}}));
+                      const final = matches[0];
+                      const task = [...document.querySelectorAll('details')].find(node => node.textContent.includes('intervening task result'));
+                      const steering = messages.find(node => node.textContent.includes('interstitial steering'));
+                      const ids = [...document.querySelectorAll('[id]')].map(node => node.id);
+                      return matches.length === 1 && !!final?.getClientRects().length
+                        && !final.closest('details') && !!task && !task.open
+                        && !!(final.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING)
+                        && !!(task.compareDocumentPosition(steering) & Node.DOCUMENT_POSITION_FOLLOWING)
+                        && !messages.some(node => node.textContent.trim() === 'draft')
+                        && new Set(ids).size === ids.length
+                        && document.querySelectorAll('.chat-running-item').length === 0;
+                    })()
+                    """));
+                await using var restored = await AgentChat.CreateAsync(new()
+                {
+                    AgentSessionId = chat.AgentSessionId, AgentDefinition = null,
+                    ConfiguredStore = store, ClientOverride = new CopilotSubAgentChatClient(),
+                    ForegroundScheduler = TaskScheduler.FromCurrentSynchronizationContext(),
+                });
+                Assert.Equal(finalText, string.Concat(Assert.Single(restored.History, item => item.MessageId == "answer").Contents.OfType<TextContent>().Select(text => text.Text)));
+            }
+            finally { window.Close(); }
         });
 
     private sealed class GatedHistoryStore : IAgentPersistenceStore

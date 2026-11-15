@@ -187,6 +187,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
     // Guarded by steeringLock because the Copilot path fires SteeringMessageForwarded from
     // the UI thread while the processing loop runs on its own task.
     private PartialResponseConflator? activeConflator;
+    internal StreamingAggregationWork? ProjectionAggregationWork { get; private set; }
+    internal StreamingAggregationWork? PersistenceAggregationWork => (this.client as StreamingPersistenceMiddleware)?.AggregationWork;
     private readonly object steeringLock = new();
 
     // Serializes foreground work when the chat is created without a synchronization context (for
@@ -2155,6 +2157,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
         try
         {
+            this.copilotSdkClient?.SealRootOutput();
             await this.DisposeCoreAsync(awaitCreation: true).ConfigureAwait(false);
             if (markTerminal)
                 Volatile.Write(ref this.disposalCompleted, 1);
@@ -2323,8 +2326,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         private readonly AgentChatRunningItem runningItem;
         private readonly string assistantRunId;
         private readonly TaskScheduler foregroundScheduler;
-        private readonly List<AgentResponseUpdate> updates = new();
-        private readonly List<(int AfterUpdateCount, AgentChatHistoryItem Item)> interstitials = new();
+        private readonly List<object> pending = new();
+        private readonly StreamingResponseAccumulator accumulator;
+        private readonly Dictionary<int, int> promotedHistoryIndices = [];
         private readonly object gate = new();
         private long version;
         private long processedVersion;
@@ -2344,6 +2348,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             runningItem.AssistantRunId = this.assistantRunId;
             this.documentOrigin = new AgentDocumentOrigin(owner.DocumentWorkingDirectory, owner.IsLocalDocumentFileSystem,
                 owner.DocumentOwnerProfileId, Environment.MachineName);
+            this.accumulator = new(owner.timeProvider, assistantRunId, this.documentOrigin);
             (owner.client as StreamingPersistenceMiddleware)?.SetAssistantRunId(this.assistantRunId, this.documentOrigin);
         }
 
@@ -2352,7 +2357,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
             bool startWorker = false;
             lock (this.gate)
             {
-                this.updates.Add(update);
+                this.pending.Add(update);
                 this.version++;
                 if (!this.workerRunning)
                 {
@@ -2368,17 +2373,16 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
 
         /// <summary>
-        /// Records a steering message to appear at the current update-count boundary in the
-        /// running item. Steering injected at update N will appear after the items coalesced
-        /// from updates 0..N-1 and before those from N onwards — i.e. at the tool-result boundary
-        /// where it was sent to the agent.
+        /// Preserves a steering/diagnostic item's encounter position without splitting the
+        /// run's identity ownership. A later authoritative correction still updates its
+        /// original message on the other side of this interstitial.
         /// </summary>
         internal void InjectInterstitialAfterCurrentUpdates(AgentChatHistoryItem item)
         {
             bool startWorker = false;
             lock (this.gate)
             {
-                this.interstitials.Add((this.updates.Count, item));
+                this.pending.Add(item);
                 this.version++;
                 if (!this.workerRunning)
                 {
@@ -2435,8 +2439,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         {
             while (true)
             {
-                AgentResponseUpdate[] snapshot;
-                (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitialSnapshot;
+                object[] pending;
                 long targetVersion;
                 lock (this.gate)
                 {
@@ -2447,34 +2450,38 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     }
 
                     targetVersion = this.version;
-                    snapshot = this.updates.ToArray();
-                    interstitialSnapshot = [..this.interstitials];
+                    pending = this.pending.ToArray();
+                    this.pending.Clear();
                 }
 
-                // Capture the current cached items before the background task so that the
-                // background work does not race with a foreground assignment to cachedItems.
-                var previousItems = this.cachedItems;
-
-                // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider, this.assistantRunId, this.documentOrigin));
+                var frame = await Task.Run(() =>
+                {
+                    foreach (var value in pending)
+                    {
+                        if (value is AgentResponseUpdate update) this.accumulator.Add(update);
+                        else this.accumulator.AddInterstitial((AgentChatHistoryItem)value);
+                    }
+                    var items = this.accumulator.Snapshot();
+                    if (this.accumulator.LastWasToolResult)
+                        items = [..items, new AgentChatHistoryItem
+                        {
+                            Role = ChatRole.Assistant, Timestamp = this.owner.timeProvider.GetUtcNow(),
+                            AssistantRunId = this.assistantRunId, DocumentOrigin = this.documentOrigin,
+                        }];
+                    this.owner.ProjectionAggregationWork = this.accumulator.Measure();
+                    return (Items: items, Changed: this.accumulator.TakeChangedIndices());
+                });
+                var chatHistoryItems = frame.Items;
 
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
 
-                var promotedReplacements = chatHistoryItems.Take(this.promotedCount)
-                    .Where((item, index) => item.MessageId is not null && index < previousItems.Length
-                        && !ReferenceEquals(item, previousItems[index])).ToArray();
+                var promotedReplacements = frame.Changed.Where(index => index < this.promotedCount).ToArray();
                 if (promotedReplacements.Length > 0)
                     await Task.Factory.StartNew(() =>
                     {
-                        foreach (var replacement in promotedReplacements)
-                            for (var i = 0; i < this.owner.History.Count; i++)
-                                if (this.owner.History[i].AssistantRunId == replacement.AssistantRunId
-                                    && this.owner.History[i].MessageId == replacement.MessageId)
-                                {
-                                    this.owner.History.Replace(i, replacement);
-                                    break;
-                                }
+                        foreach (var index in promotedReplacements)
+                            this.owner.History.Replace(this.promotedHistoryIndices[index], chatHistoryItems[index]);
                     }, CancellationToken.None, TaskCreationOptions.DenyChildAttach, this.foregroundScheduler);
 
                 // Items 0..stableCount-1 are stable (the last item is still receiving tokens).
@@ -2482,9 +2489,15 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 var stableCount = chatHistoryItems.Length > 1 ? chatHistoryItems.Length - 1 : 0;
                 if (stableCount > this.promotedCount)
                 {
-                    var toPromote = chatHistoryItems[this.promotedCount..stableCount];
                     await Task.Factory.StartNew(
-                        () => this.owner.PromoteItemsToHistory(this.runningItem, toPromote),
+                        () =>
+                        {
+                            for (var index = this.promotedCount; index < stableCount; index++)
+                            {
+                                this.promotedHistoryIndices[index] = this.owner.History.Count;
+                                this.owner.PromoteItemsToHistory(this.runningItem, [chatHistoryItems[index]]);
+                            }
+                        },
                         CancellationToken.None,
                         TaskCreationOptions.DenyChildAttach,
                         this.foregroundScheduler);
@@ -2503,97 +2516,6 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                 lock (this.gate)
                 {
                     this.processedVersion = targetVersion;
-                }
-            }
-        }
-
-        private static async Task<AgentChatHistoryItem[]> CoalesceAsync(
-            AgentResponseUpdate[] snapshot,
-            AgentChatHistoryItem[] previous,
-            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials,
-            TimeProvider timeProvider,
-            string assistantRunId,
-            AgentDocumentOrigin documentOrigin)
-        {
-            AgentChatHistoryItem[] newItems;
-
-            if (interstitials.Length == 0)
-            {
-                // Fast path: no interstitials, single pass.
-                newItems = await CoalesceSegmentAsync(snapshot, timeProvider);
-            }
-            else
-            {
-                // Interstitials mark "inject this item after the first N streaming updates."
-                // Split the snapshot at each boundary, coalesce each segment independently,
-                // then interleave the injected items so they appear at the right position.
-                var result = new List<AgentChatHistoryItem>();
-                int segStart = 0;
-
-                foreach (var (afterCount, item) in interstitials.OrderBy(static x => x.AfterUpdateCount))
-                {
-                    int segEnd = Math.Min(afterCount, snapshot.Length);
-                    if (segEnd > segStart)
-                    {
-                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd], timeProvider));
-                    }
-
-                    result.Add(item);
-                    segStart = segEnd;
-                }
-
-                // Tail: remaining updates after the last interstitial.
-                if (segStart < snapshot.Length)
-                {
-                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..], timeProvider));
-                }
-
-                newItems = result.ToArray();
-            }
-
-            // Add a blank assistant placeholder if the full snapshot ends with a tool result,
-            // indicating the agent is still waiting to respond to the tool output.
-            var lastIsToolResult = snapshot.Length > 0
-                && snapshot[^1].Contents.OfType<ToolResultContent>().Any();
-            if (lastIsToolResult)
-            {
-                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = timeProvider.GetUtcNow() }];
-            }
-
-            newItems = newItems.Select(item => item.AssistantRunId is null && item.Role != ChatRole.User
-                ? item with { AssistantRunId = assistantRunId, DocumentOrigin = documentOrigin }
-                : item).ToArray();
-            // Re-use the cached reference for each item whose content is structurally unchanged.
-            // This lets AgentRunningItems.SyncItems' ReferenceEquals guard suppress unnecessary
-            // Replace notifications (and their downstream HTML re-render work) for stable items.
-            ReuseUnchangedItemReferences(previous, newItems);
-            return newItems;
-        }
-
-        // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
-        // returns an empty array; no assistant placeholder is added here (that is handled by the
-        // caller on the full snapshot).
-        private static Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
-            => Task.FromResult(AgentResponseUpdateCoalescer.Coalesce(updates, timeProvider));
-
-        /// <summary>
-        /// For each position where the new item is structurally identical to the cached previous
-        /// item, replaces the new instance with the cached one so callers can use reference
-        /// equality to detect unchanged items cheaply.
-        /// </summary>
-        private static void ReuseUnchangedItemReferences(
-            AgentChatHistoryItem[] previous,
-            AgentChatHistoryItem[] current)
-        {
-            var reuseCount = Math.Min(previous.Length, current.Length);
-            for (var i = 0; i < reuseCount; i++)
-            {
-                if (previous[i].MessageId is { } id && id == current[i].MessageId
-                    && previous[i].AssistantRunId == current[i].AssistantRunId)
-                    current[i] = current[i] with { Timestamp = previous[i].Timestamp };
-                if (AreStructurallyEqual(previous[i], current[i]))
-                {
-                    current[i] = previous[i];
                 }
             }
         }
@@ -2672,19 +2594,26 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         List<AgentInputTurnCompletion> turnCompletions = new List<AgentInputTurnCompletion>();
         ChatMessage[] deferredMessages = [];
         AgentInputTurnCompletion[] deferredCompletions = [];
+        var admissionFailed = false;
+        var admissionDrainCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admissionDiagnostics = new List<AgentChatHistoryItem>();
 
         try
         {
             this.isBusy = true;
-            while (!cancellationToken.IsCancellationRequested
-                   && Volatile.Read(ref this.disposeStarted) == 0)
+            while ((!admissionFailed && !cancellationToken.IsCancellationRequested && Volatile.Read(ref this.disposeStarted) == 0)
+                   || this.copilotSdkClient?.HasPendingRootContinuation == true)
             {
+                var drainingShutdown = admissionFailed || cancellationToken.IsCancellationRequested || Volatile.Read(ref this.disposeStarted) != 0;
                 chatMessagesToSubmit.Clear();
                 turnCompletions.Clear();
-                chatMessagesToSubmit.AddRange(deferredMessages);
-                turnCompletions.AddRange(deferredCompletions);
-                deferredMessages = [];
-                deferredCompletions = [];
+                if (!drainingShutdown)
+                {
+                    chatMessagesToSubmit.AddRange(deferredMessages);
+                    turnCompletions.AddRange(deferredCompletions);
+                    deferredMessages = [];
+                    deferredCompletions = [];
+                }
                 var consumeRootContinuation = false;
                 while (chatMessagesToSubmit.Count == 0)
                 {
@@ -2693,6 +2622,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         consumeRootContinuation = true;
                         break;
                     }
+                    if (drainingShutdown) break;
                     while(this.queueManager.TryDequeueNextImmediateOrQueued(
                         out var agentInputItem))
                     {
@@ -2726,13 +2656,15 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     turnCompletions.Clear();
                     consumeRootContinuation = true;
                 }
-                this.AppendUserMessagesToHistory(chatMessagesToSubmit);
+                if (this.copilotSdkClient is null)
+                    this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
                 // A fresh per-run cancellation source (linked to the loop token) is what InterruptAsync()
                 // cancels. Publish it before creating the running item because creating that item
                 // synchronously notifies observers; an interrupt from that notification must not be
                 // lost before the provider read starts.
                 var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                if (admissionFailed) await runCancellation.CancelAsync();
                 var activeTurnCompletion =
                     new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 lock (this.processingStateLock)
@@ -2762,6 +2694,22 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             AssistantRunId = assistantRunId,
                         }]);
 
+                    if (this.copilotSdkClient is not null && chatMessagesToSubmit.Count > 0)
+                    {
+                        admittedBatch = await this.copilotSdkClient.AdmitRootRequestAsync(
+                            admittedBatch, chatMessagesToSubmit, this.chatOptions?.ChatOptions,
+                            () => Volatile.Read(ref this.disposeStarted) == 0, runCancellation.Token);
+                        if (admittedBatch.IsContinuation)
+                        {
+                            deferredMessages = [..chatMessagesToSubmit];
+                            deferredCompletions = [..turnCompletions];
+                            chatMessagesToSubmit.Clear();
+                            turnCompletions.Clear();
+                            consumeRootContinuation = true;
+                        }
+                        else this.AppendUserMessagesToHistory(chatMessagesToSubmit);
+                    }
+
                     partialResponses = new PartialResponseConflator(
                         this,
                         currentPartialTextResponseItem
@@ -2774,6 +2722,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         {
                             var recovered = new AgentResponseUpdate
                             {
+                                AgentId = this.chatClientAgent?.Id,
                                 Role = update.Role,
                                 AuthorName = update.AuthorName,
                                 MessageId = update.MessageId,
@@ -2832,6 +2781,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                     // Flush the final accumulated frame (intermediate frames may have been skipped).
                     await partialResponses.DrainAsync();
                 }
+                catch (OperationCanceledException) when (admissionFailed || cancellationToken.IsCancellationRequested)
+                {
+                    if (partialResponses is not null) await DrainQuietlyAsync(partialResponses);
+                }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {
                     // The user interrupted the active run (Ctrl+Break). Record an "interrupted"
@@ -2862,9 +2815,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
                     this.UpdateRunningItem(runningItem, interruptedItems);
                 }
-                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested || acceptedOutputOwner is not null)
                 {
-                    if (acceptedOutputOwner is not null && Volatile.Read(ref this.disposeStarted) != 0)
+                    if (acceptedOutputOwner is not null)
                         ownedRunFailure = ex;
                     var runningItem = currentPartialTextResponseItem
                         ?? throw new InvalidOperationException("Running item was unexpectedly null while handling a provider error.");
@@ -2891,7 +2844,9 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         ])
                         .ToArray();
 
-                    this.UpdateRunningItem(runningItem, errorItems);
+                    if (admittedBatch is { RequestSend: not null, WasTaken: false })
+                        admissionDiagnostics.Add(errorItems[^1]);
+                    else this.UpdateRunningItem(runningItem, errorItems);
                 }
                 finally
                 {
@@ -2908,6 +2863,20 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         // Clean up the provider enumerator and run CTS in the background so a provider stuck
                         // on a canceled read cannot block the agent. The in-flight read is observed before
                         // disposing to honor the async-enumerator contract.
+                        var returningNativeAdmission = ownedRunFailure is not null
+                            && admittedBatch is { RequestSend: not null, WasTaken: false };
+                        if (returningNativeAdmission)
+                        {
+                            // Request persistence can fail before framework enumeration reaches the SDK.
+                            // Transfer that finite receipt to a drain-only run, never retry the append/send.
+                            admissionFailed = true;
+                            admittedBatch!.Owner.SealAccepted();
+                            try { await runCancellation.CancelAsync(); }
+                            catch (Exception failure)
+                            {
+                                ownedRunFailure = new AggregateException("Request admission and cancellation failed.", ownedRunFailure!, failure);
+                            }
+                        }
                         var providerCleanup = CleanUpRunAsync(
                             providerEnumerator,
                             abandonedMoveNext,
@@ -2955,9 +2924,13 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
                         foreach (var turnCompletion in turnCompletions)
                         {
-                            turnCompletion.CompleteAfter(providerCleanup);
+                            turnCompletion.CompleteAfter(returningNativeAdmission
+                                ? Task.WhenAll(providerCleanup, admissionDrainCompletion.Task)
+                                : providerCleanup);
                         }
-                        if (cleanupFailure is not null)
+                        admittedBatch?.Dispose();
+                        admittedBatch = null;
+                        if (cleanupFailure is not null && !returningNativeAdmission)
                             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
                     }
                     finally
@@ -2981,6 +2954,14 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         }
         finally
         {
+            if (admissionFailed && this.copilotSdkClient is { } admittedClient)
+            {
+                var retirement = admittedClient.RetireAdmittedRequestAsync();
+                lock (this.processingStateLock) this.providerCleanupTasks.Add(retirement);
+                await retirement.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+            }
+            foreach (var diagnostic in admissionDiagnostics) this.AddHistoryItem(diagnostic);
+            admissionDrainCompletion.TrySetResult();
             foreach (var completion in deferredCompletions)
             {
                 completion.ClaimTerminal();

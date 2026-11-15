@@ -168,13 +168,11 @@ public static class CopilotSdkStreamAdapter
                     var rootMessageKey = RootMessageId(rootFinal.Data.MessageId);
                     var coveredText = rootTextByMessage.TryGetValue(rootMessageKey, out var coverage)
                         ? coverage.ToString() : string.Empty;
-                    var replacesCoverage = !rootFinal.Data.Content.StartsWith(coveredText, StringComparison.Ordinal);
-                    if (replacesCoverage || coveredText.Length < rootFinal.Data.Content.Length)
+                    if (!string.Equals(rootFinal.Data.Content, coveredText, StringComparison.Ordinal))
                     {
                         rootTextByMessage[rootMessageKey] = new StringBuilder(rootFinal.Data.Content);
-                        var finalText = new TextContent(replacesCoverage
-                            ? rootFinal.Data.Content : rootFinal.Data.Content[coveredText.Length..]);
-                        if (replacesCoverage)
+                        var finalText = new TextContent(rootFinal.Data.Content);
+                        if (coveredText.Length > 0)
                             finalText.AdditionalProperties = new()
                             {
                                 [Phantom.Workspaces.Llm.Interfaces.StoreRequestAgent.ReplacementPropertyName] = true,
