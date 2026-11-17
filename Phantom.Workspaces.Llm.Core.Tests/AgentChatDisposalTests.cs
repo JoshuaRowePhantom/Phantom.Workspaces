@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
-public sealed class AgentChatDisposalTests
+public sealed class AgentChatDisposalTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public async Task FactoryDisposal_PreservesEveryIndependentDeferredSelfTerminationFailure()
@@ -48,7 +48,7 @@ public sealed class AgentChatDisposalTests
     public async Task FactorySelfTermination_CancellationFailureStillDrainsAndPreservesIndependentFailures()
     {
         var client = new SelfTerminatingClient(fails: true, cancellationFails: true);
-        var resource = new FailureResource(new IOException("independent disposal failure"));
+        var resource = new FailureResource(new IOException("independent disposal failure"), client.Record);
         var scheduler = new ConcurrentExclusiveSchedulerPair();
         await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(),
             new AgentServices { ChatClientOverride = client }, scheduler.ExclusiveScheduler);
@@ -65,9 +65,14 @@ public sealed class AgentChatDisposalTests
         {
             Assert.False(disposing.IsCompleted);
             Assert.Equal(0, resource.Disposals);
+            await client.CancellationInvoked.Task;
+            Assert.Equal(1, client.CallbackInvocations);
+            Assert.False(client.RegistrationDisposed.Task.IsCompleted);
+            client.Record("callback-observed-before-provider-release");
             client.Release.TrySetResult();
             var failure = await Assert.ThrowsAsync<AggregateException>(() => disposing);
             var originals = failure.Flatten().InnerExceptions;
+            WriteOwnershipTrace(client, resource, originals);
             Assert.Equal(3, originals.Count);
             Assert.Single(originals, error => ReferenceEquals(error, client.CancellationFailure));
             Assert.Single(originals, error => ReferenceEquals(error, client.Failure));
@@ -80,6 +85,87 @@ public sealed class AgentChatDisposalTests
             await disposing.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
     }
+
+    [Fact]
+    public async Task FactorySelfTermination_ProviderUnwindsBeforeCallback_PreservesEveryInvokedFailure()
+    {
+        var client = new SelfTerminatingClient(fails: true, cancellationFails: true);
+        var resource = new FailureResource(new IOException("independent disposal failure"), client.Record);
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(),
+            new AgentServices { ChatClientOverride = client }, scheduler.ExclusiveScheduler);
+        var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(Guid.NewGuid().ToString());
+        var lease = await factory.GetOrCreateAsync(sessionId,
+            AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson));
+        lease.LocalAgentChat.RegisterOwnedResource(resource);
+        using var releasePropagation = new ManualResetEventSlim();
+        var propagationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CancellationTokenRegistration propagationGate = default;
+        client.OnRegistered = () =>
+        {
+            var parent = (CancellationTokenSource)typeof(AgentChat).GetField("cts",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(lease.LocalAgentChat)!;
+            // Register last on the parent so its CancelAsync worker pauses before linked-token
+            // propagation. Cancellation callbacks are synchronous; never block the foreground.
+            propagationGate = parent.Token.Register(() =>
+            {
+                Assert.True(Thread.CurrentThread.IsThreadPoolThread);
+                client.Record("parent-propagation-paused");
+                propagationEntered.TrySetResult();
+                releasePropagation.Wait();
+                client.Record("parent-propagation-released");
+            });
+        };
+        client.Close = () => factory.TerminateExactAsync(sessionId, lease.AgentChat);
+        Task? disposing = null;
+        try
+        {
+            lease.LocalAgentChat.EnqueueUserMessage("close yourself");
+            await client.Closed.Task;
+            await propagationEntered.Task;
+            disposing = factory.DisposeAsync().AsTask();
+            Assert.False(disposing.IsCompleted);
+            Assert.Equal(0, resource.Disposals);
+            client.Record("provider-release");
+            client.Release.TrySetResult();
+            await client.RegistrationDisposed.Task;
+            Assert.Equal(0, client.CallbackInvocations);
+            Assert.False(disposing.IsCompleted);
+            releasePropagation.Set();
+            var failure = await Assert.ThrowsAsync<AggregateException>(() => disposing);
+            var originals = failure.Flatten().InnerExceptions;
+            WriteOwnershipTrace(client, resource, originals);
+            Assert.Equal(2, originals.Count);
+            Assert.Single(originals, error => ReferenceEquals(error, client.Failure));
+            Assert.Single(originals, error => ReferenceEquals(error, resource.Failure));
+            Assert.DoesNotContain(originals, error => ReferenceEquals(error, client.CancellationFailure));
+            Assert.Equal(0, client.CallbackInvocations);
+            Assert.Equal(1, resource.Disposals);
+        }
+        finally
+        {
+            releasePropagation.Set();
+            client.Release.TrySetResult();
+            propagationGate.Dispose();
+            if (disposing is not null)
+                await disposing.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+    }
+
+    private void WriteOwnershipTrace(
+        SelfTerminatingClient client, FailureResource resource, IReadOnlyCollection<Exception> originals)
+        => output.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            client.Events,
+            client.CallbackInvocations,
+            CancellationErrors = originals.Count(error => ReferenceEquals(error, client.CancellationFailure)),
+            ProviderErrors = originals.Count(error => ReferenceEquals(error, client.Failure)),
+            ResourceErrors = originals.Count(error => ReferenceEquals(error, resource.Failure)),
+            OtherErrors = originals.Count(error => !ReferenceEquals(error, client.CancellationFailure)
+                && !ReferenceEquals(error, client.Failure) && !ReferenceEquals(error, resource.Failure)),
+            resource.Disposals,
+        }));
 
     [Theory]
     [InlineData(false, false)]
@@ -152,6 +238,14 @@ public sealed class AgentChatDisposalTests
         internal Func<Task<bool>>? Close { get; set; }
         internal TaskCompletionSource Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource CancellationInvoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource RegistrationDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Action? OnRegistered { get; set; }
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> events = new();
+        private int callbackInvocations;
+        internal int CallbackInvocations => Volatile.Read(ref this.callbackInvocations);
+        internal string[] Events => this.events.ToArray();
+        internal void Record(string value) => this.events.Enqueue(value);
         internal Exception Failure { get; } = new IOException("late provider failure");
         internal Exception CancellationFailure { get; } = new InvalidOperationException("cancellation callback failure");
 
@@ -159,15 +253,38 @@ public sealed class AgentChatDisposalTests
             IEnumerable<ChatMessage> messages, ChatOptions? options = null,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            using var registration = cancellationFails
-                ? cancellationToken.Register(() => throw this.CancellationFailure)
+            var registration = cancellationFails
+                ? cancellationToken.Register(() =>
+                {
+                    Interlocked.Increment(ref this.callbackInvocations);
+                    this.Record("cancellation-callback-invoked");
+                    this.CancellationInvoked.TrySetResult();
+                    throw this.CancellationFailure;
+                })
                 : default;
-            Assert.True(await this.Close!());
-            this.Closed.TrySetResult();
-            await this.Release.Task;
-            if (fails) throw this.Failure;
-            cancellationToken.ThrowIfCancellationRequested();
-            yield break;
+            this.Record("provider-registered");
+            this.OnRegistered?.Invoke();
+            try
+            {
+                Assert.True(await this.Close!());
+                this.Record("self-close-returned");
+                this.Closed.TrySetResult();
+                await this.Release.Task;
+                if (fails)
+                {
+                    this.Record("provider-failure");
+                    throw this.Failure;
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                yield break;
+            }
+            finally
+            {
+                this.Record("enumerator-unwind");
+                registration.Dispose();
+                this.Record("registration-disposed");
+                this.RegistrationDisposed.TrySetResult();
+            }
         }
 
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages,
@@ -221,13 +338,14 @@ public sealed class AgentChatDisposalTests
         Assert.Equal(1, resource.Disposals);
     }
 
-    private sealed class FailureResource(Exception failure) : IAsyncDisposable
+    private sealed class FailureResource(Exception failure, Action<string>? observe = null) : IAsyncDisposable
     {
         public int Disposals { get; private set; }
         public Exception Failure => failure;
 
         public ValueTask DisposeAsync()
         {
+            observe?.Invoke("resource-disposal");
             this.Disposals++;
             return ValueTask.FromException(failure);
         }
