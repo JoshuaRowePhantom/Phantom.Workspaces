@@ -12,6 +12,7 @@
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Controls.WebView" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Moq" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
@@ -32,5 +33,6 @@
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotClient.cs" Link="Infrastructure\FakeCopilotClient.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\Infrastructure\FakeCopilotClientFactory.cs" Link="Infrastructure\FakeCopilotClientFactory.cs" />
     <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\SubAgentTestFakes.cs" Link="SubAgentTestFakes.cs" />
+    <Compile Include="..\Phantom.Workspaces.Transport.Tests\Infrastructure\ByokScenarioCredentials.cs" Link="Infrastructure\ByokScenarioCredentials.cs" />
   </ItemGroup>
 </Project>

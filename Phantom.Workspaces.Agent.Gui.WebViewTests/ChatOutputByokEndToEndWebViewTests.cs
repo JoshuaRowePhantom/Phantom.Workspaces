@@ -14,6 +14,8 @@ using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Tests;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Interfaces.Access;
+using Phantom.Workspaces.Transport.Tests.Infrastructure;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
@@ -147,7 +149,9 @@ public sealed class ChatOutputByokEndToEndWebViewTests
 
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
             var store = new InMemoryAgentPersistenceStore();
-            await using var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
+            await using var credentials = new ByokScenarioCredentials();
+            var credentialServices = credentials.Services with { LoggerFactory = loggerFactory };
+            await using var factory = new AgentChatFactory(store, credentialServices, foregroundScheduler);
 
             // The chat client is resolved from this definition by AgentFactory inside
             // AgentChat.CreateAsync: the openai provider string selects the copilot-sdk BYOK
@@ -163,7 +167,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     "connection": {
                       "kind": "key",
                       "endpoint": "{{server.BaseUrl}}",
-                      "apiKey": "test-key"
+                      "apiKey": "{{ByokScenarioCredentials.Reference}}"
                     },
                     "options": {
                       "additionalProperties": {
@@ -175,7 +179,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                 }
                 """);
 
-            var parentServices = new AgentServices
+            var parentServices = credentialServices with
             {
                 LoggerFactory = loggerFactory,
                 RunningAgentChatFactory = factory,
@@ -239,17 +243,21 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                             .Distinct(StringComparer.Ordinal)
                             .ToArray();
 
-                    var firstRuntimeAgentId = Assert.Single(RuntimeAgentIds());
-                    mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
-                        ChatRole.Assistant,
-                        [new FunctionCallContent(
-                            "call_read_1",
-                            "read_agent",
-                            new Dictionary<string, object?>
-                            {
-                                ["agent_id"] = firstRuntimeAgentId,
-                                ["wait"] = true,
-                            })]));
+                    var runtimeAgentIds = RuntimeAgentIds();
+                    Assert.Equal(2, runtimeAgentIds.Length);
+                    foreach (var (agentId, index) in runtimeAgentIds.Select((agentId, index) => (agentId, index)))
+                    {
+                        mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
+                            ChatRole.Assistant,
+                            [new FunctionCallContent(
+                                $"call_read_{index + 1}",
+                                "read_agent",
+                                new Dictionary<string, object?>
+                                {
+                                    ["agent_id"] = agentId,
+                                    ["wait"] = true,
+                                })]));
+                    }
                     mainTurn1.Complete();
 
                     var subControls = new List<(string AgentId, AgentChat Chat, ControllableWebViewControl Browser)>();
@@ -329,6 +337,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     }
 
                     Assert.Empty(server.Failures);
+                    AssertCredentialUse(credentials, server);
                 }
                 finally
                 {
@@ -348,12 +357,11 @@ public sealed class ChatOutputByokEndToEndWebViewTests
 
     /// <summary>
     /// Production-wiring variant closing the coverage gap that let issue #913 slip through: the
-    /// GUI never sets <see cref="AgentServices.RunningAgentChatFactory"/>, so real sub-agents are
-    /// created through the <see cref="ISubAgentChatRegistry"/> path (<c>AgentChat.GetOrCreateAsync</c>),
-    /// not the factory/lease path this class's other test wires up. The original test also called
+    /// caller leaves <see cref="AgentServices.RunningAgentChatFactory"/> unset and the production
+    /// factory injects itself, so real sub-agents use the factory/lease path. The original test called
     /// <c>EndBatch()</c> before reading the DOM, which synchronously flushes the message batch and
     /// masks a dead auto-flush timer. This variant uses production wiring (no
-    /// <c>RunningAgentChatFactory</c>) and asserts the sub-agent DOM content arrives LIVE — via a
+    /// caller-supplied <c>RunningAgentChatFactory</c>) and asserts the sub-agent DOM content arrives LIVE — via a
     /// MutationObserver posting back through the bridge, with no explicit flush — so a sub-agent
     /// chat bound to a non-pumping scheduler fails this test the way the real app failed.
     /// </summary>
@@ -424,7 +432,9 @@ public sealed class ChatOutputByokEndToEndWebViewTests
 
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
             var store = new InMemoryAgentPersistenceStore();
-            await using var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
+            await using var credentials = new ByokScenarioCredentials();
+            var credentialServices = credentials.Services with { LoggerFactory = loggerFactory };
+            await using var factory = new AgentChatFactory(store, credentialServices, foregroundScheduler);
 
             var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson($$"""
                 {
@@ -436,7 +446,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     "connection": {
                       "kind": "key",
                       "endpoint": "{{server.BaseUrl}}",
-                      "apiKey": "test-key"
+                      "apiKey": "{{ByokScenarioCredentials.Reference}}"
                     },
                     "options": {
                       "additionalProperties": {
@@ -451,7 +461,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             // Mirrors App.axaml.cs / AgentSessionShortcutContext: callers leave
             // RunningAgentChatFactory unset, but AgentChatFactory.WithSelfAsFactory injects
             // itself unconditionally, so sub-agents use the factory/table path.
-            var parentServices = new AgentServices
+            var parentServices = credentialServices with
             {
                 LoggerFactory = loggerFactory,
             };
@@ -562,6 +572,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     }
 
                     Assert.Empty(server.Failures);
+                    AssertCredentialUse(credentials, server);
                 }
                 finally
                 {
@@ -574,6 +585,20 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                 await lease.DisposeAsync();
             }
         });
+
+    private static void AssertCredentialUse(ByokScenarioCredentials credentials, ScriptedByokChatServer server)
+    {
+        var request = Assert.Single(credentials.Requests);
+        Assert.Equal(ByokScenarioCredentials.KeyName, request.Reference.Name);
+        Assert.Equal(credentials.Services.AccessRequestor, request.Requestor);
+        Assert.Equal(credentials.Services.AccessLineage!.Session, request.Use.Lineage.Session);
+        Assert.Equal(AccessPresentationScope.Bootstrap, request.PresentationScope);
+        Assert.Equal(CredentialSourceKind.Environment, Assert.Single(request.Sources).Kind);
+        Assert.Single(credentials.Results);
+        Assert.True(credentials.Validations > 0);
+        Assert.True(credentials.GenerationChecks > 0);
+        Assert.NotEmpty(server.RecordedRequests);
+    }
 
     private static string Diagnostics(ScriptedByokChatServer server, AgentChat chat, ObservableLoggerFactory loggerFactory)
     {
