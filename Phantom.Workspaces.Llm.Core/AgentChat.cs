@@ -937,6 +937,30 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
     private readonly List<Task> providerCleanupTasks = [];
 
+    private sealed class ProviderExecution(AgentChat chat)
+    {
+        internal AgentChat Chat { get; } = chat;
+        internal volatile bool Active = true;
+    }
+
+    private static readonly AsyncLocal<ProviderExecution?> executingProvider = new();
+
+    internal bool IsExecutingProvider => executingProvider.Value is { Active: true } execution
+        && ReferenceEquals(execution.Chat, this);
+
+    private async Task<bool> MoveProviderNextAsync(IAsyncEnumerator<AgentResponseUpdate> provider)
+    {
+        var previous = executingProvider.Value;
+        var execution = new ProviderExecution(this);
+        executingProvider.Value = execution;
+        try { return await provider.MoveNextAsync(); }
+        finally
+        {
+            execution.Active = false;
+            executingProvider.Value = previous;
+        }
+    }
+
     public AgentChatQueueManager QueueManager => this.chatQueueManager;
 
     public bool IsBusy => this.isBusy;
@@ -2776,7 +2800,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                         // Race each provider read against the interrupt token so a Ctrl+Break stops the
                         // loop promptly even if the provider/framework is slow to observe cancellation
                         // (for example while flushing end-of-run persistence).
-                        pendingMoveNext = providerEnumerator.MoveNextAsync().AsTask();
+                        pendingMoveNext = this.MoveProviderNextAsync(providerEnumerator);
                         if (acceptedOutputOwner is null
                             && await WasCanceledBeforeCompletingAsync(pendingMoveNext, runCancellation.Token))
                         {
@@ -3047,7 +3071,7 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
 
             try
             {
-                while (await providerEnumerator.MoveNextAsync())
+                while (await this.MoveProviderNextAsync(providerEnumerator))
                 {
                     this.AccumulateUsage(providerEnumerator.Current);
                     partialResponses.Notify(providerEnumerator.Current);

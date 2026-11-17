@@ -1220,7 +1220,7 @@ public sealed class RemoteAgentSessionScenarioTests
         try
         {
             await stream.WaitForDisposalStartedAsync(TestContext.Current.CancellationToken);
-            await disposal;
+            Assert.False(disposal.IsCompleted);
             var sessionId = new AgentSessionId("provider-cleanup");
             var factory = new Mock<Phantom.Workspaces.Llm.IRunningAgentChatFactory>();
             factory.SetupGet(value => value.RunningSessions).Returns(new ObservableCollection<RunningAgentChat>());

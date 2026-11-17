@@ -24,6 +24,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
         public AgentRuntimeQueueCheckpoint? RestartCheckpoint { get; set; }
         public bool ShutdownConfirmed { get; set; }
         public Task? PendingRestartCleanup { get; set; }
+        public bool ProviderRequestedTermination { get; set; }
     }
 
     private readonly IAgentPersistenceStore _store;
@@ -599,6 +600,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 TaskCreationOptions.RunContinuationsAsynchronously);
             disposalCompletion = entry.DisposalCompletion;
             toDispose = entry.AgentChat;
+            if (ownsDisposal && toDispose.IsExecutingProvider)
+                entry.ProviderRequestedTermination = true;
         }
         finally
         {
@@ -607,6 +610,11 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
 
         if (!ownsDisposal)
         {
+            if (toDispose.IsExecutingProvider)
+            {
+                await toDispose.InterruptAsync(ct).ConfigureAwait(false);
+                return true;
+            }
             if (disposalCompletion.Task.IsFaulted)
                 await disposalCompletion.Task.WaitAsync(ct).ConfigureAwait(false);
             await toDispose.TerminateAsync(ct).ConfigureAwait(false);
@@ -614,12 +622,26 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             return true;
         }
 
-        await DisposeEntryAsync(sessionId, toDispose, disposalCompletion, terminate: true).ConfigureAwait(false);
+        if (toDispose.IsExecutingProvider)
+        {
+            // A self-issued tool must return before its provider read can finish. The entry
+            // still owns full cleanup: acquisition/external termination/factory disposal join it.
+            var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cleanup = DisposeEntryAsync(sessionId, toDispose, disposalCompletion,
+                terminate: true, requested);
+            _ = cleanup.ContinueWith(completed => { _ = completed.Exception; },
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted |
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            await requested.Task.ConfigureAwait(false);
+        }
+        else
+            await DisposeEntryAsync(sessionId, toDispose, disposalCompletion, terminate: true).ConfigureAwait(false);
         return true;
     }
 
     private async Task DisposeEntryAsync(
-        AgentSessionId sessionId, AgentChat chat, TaskCompletionSource completion, bool terminate)
+        AgentSessionId sessionId, AgentChat chat, TaskCompletionSource completion, bool terminate,
+        TaskCompletionSource? requested = null)
     {
         Exception? failure = null;
         try
@@ -632,13 +654,18 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                     _runningSessions.Remove(item);
             });
             if (terminate)
-                await chat.TerminateAsync(CancellationToken.None).ConfigureAwait(false);
+            {
+                var terminating = chat.TerminateAsync(CancellationToken.None);
+                requested?.TrySetResult();
+                await terminating.ConfigureAwait(false);
+            }
             else
                 await chat.DisposeAsync().ConfigureAwait(false);
         }
         catch (Exception error)
         {
             failure = error;
+            requested?.TrySetException(error);
         }
 
         if (failure is null)
@@ -752,6 +779,21 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
 
         await Task.WhenAll(toDispose.Select(async entry =>
         {
+            if (entry.ProviderRequestedTermination)
+            {
+                Exception? terminationFailure = null;
+                try { await entry.DisposalCompletion!.Task.ConfigureAwait(false); }
+                catch (Exception failure) { terminationFailure = failure; }
+                try { await entry.AgentChat.DisposeAsync().ConfigureAwait(false); }
+                catch (Exception failure) when (terminationFailure is not null
+                    && !ReferenceEquals(terminationFailure, failure))
+                {
+                    throw new AggregateException(terminationFailure, failure);
+                }
+                if (terminationFailure is not null)
+                    System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(terminationFailure).Throw();
+                return;
+            }
             if (entry.PendingRestartCleanup is { } pending)
                 await pending.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             await entry.AgentChat.DisposeAsync().ConfigureAwait(false);

@@ -9,6 +9,139 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class AgentChatDisposalTests
 {
+    [Fact]
+    public async Task FactorySelfTermination_CancellationFailureStillDrainsAndPreservesIndependentFailures()
+    {
+        var client = new SelfTerminatingClient(fails: true, cancellationFails: true);
+        var resource = new FailureResource(new IOException("independent disposal failure"));
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(),
+            new AgentServices { ChatClientOverride = client }, scheduler.ExclusiveScheduler);
+        var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(Guid.NewGuid().ToString());
+        var lease = await factory.GetOrCreateAsync(sessionId,
+            AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson));
+        lease.LocalAgentChat.RegisterOwnedResource(resource);
+        client.Close = () => factory.TerminateExactAsync(sessionId, lease.AgentChat);
+        lease.LocalAgentChat.EnqueueUserMessage("close yourself");
+        await client.Closed.Task;
+
+        var disposing = factory.DisposeAsync().AsTask();
+        try
+        {
+            Assert.False(disposing.IsCompleted);
+            Assert.Equal(0, resource.Disposals);
+            client.Release.TrySetResult();
+            var failure = await Assert.ThrowsAsync<AggregateException>(() => disposing);
+            var originals = failure.Flatten().InnerExceptions;
+            Assert.Equal(3, originals.Count);
+            Assert.Single(originals, error => ReferenceEquals(error, client.CancellationFailure));
+            Assert.Single(originals, error => ReferenceEquals(error, client.Failure));
+            Assert.Single(originals, error => ReferenceEquals(error, resource.Failure));
+            Assert.Equal(1, resource.Disposals);
+        }
+        finally
+        {
+            client.Release.TrySetResult();
+            await disposing.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task FactorySelfTermination_ReturnsToProviderButExternalOwnersAwaitCleanup(
+        bool providerFails, bool resourceFails)
+    {
+        var client = new SelfTerminatingClient(providerFails);
+        var resource = new FailureResource(new IOException("independent disposal failure"));
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(),
+            new AgentServices { ChatClientOverride = client }, scheduler.ExclusiveScheduler);
+        var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(Guid.NewGuid().ToString());
+        var lease = await factory.GetOrCreateAsync(sessionId,
+            AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson));
+        if (resourceFails) lease.LocalAgentChat.RegisterOwnedResource(resource);
+        client.Close = async () =>
+        {
+            Assert.True(await factory.TerminateExactAsync(sessionId, lease.AgentChat));
+            return await factory.TerminateExactAsync(sessionId, lease.AgentChat);
+        };
+        lease.LocalAgentChat.EnqueueUserMessage("close yourself");
+        await client.Closed.Task;
+
+        Task? terminating = null;
+        Task? disposing = null;
+        try
+        {
+            Assert.Empty(factory.RunningSessions);
+            Assert.False(lease.IsRuntimeTerminal);
+            terminating = factory.TerminateExactAsync(sessionId, lease.AgentChat);
+            disposing = factory.DisposeAsync().AsTask();
+            Assert.False(terminating.IsCompleted);
+            Assert.False(disposing.IsCompleted);
+            Assert.Equal(0, resource.Disposals);
+
+            client.Release.TrySetResult();
+            if (providerFails || resourceFails)
+            {
+                var terminationFailure = await Assert.ThrowsAsync<AggregateException>(() => terminating);
+                var disposalFailure = await Assert.ThrowsAsync<AggregateException>(() => disposing);
+                Assert.Same(terminationFailure, disposalFailure);
+                var originals = terminationFailure.Flatten().InnerExceptions;
+                Assert.Equal((providerFails ? 1 : 0) + (resourceFails ? 1 : 0), originals.Count);
+                if (providerFails) Assert.Single(originals, error => ReferenceEquals(error, client.Failure));
+                if (resourceFails) Assert.Single(originals, error => ReferenceEquals(error, resource.Failure));
+            }
+            else
+            {
+                await terminating;
+                await disposing;
+                Assert.True(lease.IsRuntimeTerminal);
+            }
+            Assert.Equal(resourceFails ? 1 : 0, resource.Disposals);
+        }
+        finally
+        {
+            client.Release.TrySetResult();
+            if (terminating is not null)
+                await terminating.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+            if (disposing is not null)
+                await disposing.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+    }
+
+    private sealed class SelfTerminatingClient(bool fails, bool cancellationFails = false) : IChatClient
+    {
+        internal Func<Task<bool>>? Close { get; set; }
+        internal TaskCompletionSource Closed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Exception Failure { get; } = new IOException("late provider failure");
+        internal Exception CancellationFailure { get; } = new InvalidOperationException("cancellation callback failure");
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            using var registration = cancellationFails
+                ? cancellationToken.Register(() => throw this.CancellationFailure)
+                : default;
+            Assert.True(await this.Close!());
+            this.Closed.TrySetResult();
+            await this.Release.Task;
+            if (fails) throw this.Failure;
+            cancellationToken.ThrowIfCancellationRequested();
+            yield break;
+        }
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+        public object? GetService(Type type, object? key = null) => null;
+        public void Dispose() { }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -56,6 +189,7 @@ public sealed class AgentChatDisposalTests
     private sealed class FailureResource(Exception failure) : IAsyncDisposable
     {
         public int Disposals { get; private set; }
+        public Exception Failure => failure;
 
         public ValueTask DisposeAsync()
         {

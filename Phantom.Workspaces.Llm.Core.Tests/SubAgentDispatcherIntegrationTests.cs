@@ -274,6 +274,7 @@ public sealed class SubAgentDispatcherIntegrationTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => disposal);
 
         Assert.Equal("late provider cleanup fault", error.Message);
+        scenario.ExpectParentCleanupFailure(error);
         Assert.Equal(1, scenario.Stream.DisposalCount);
         Assert.Empty(scenario.Factory.Leases.Values.Single().AgentChat.RunningItems);
     }
@@ -559,6 +560,7 @@ public sealed class SubAgentDispatcherIntegrationTests
 
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => terminalMove);
             Assert.Same(ownedFault, error);
+            scenario.ExpectParentCleanupFailure(ownedFault);
             firstUpdates = [];
         }
 
@@ -755,6 +757,10 @@ public sealed class SubAgentDispatcherIntegrationTests
         private readonly CancellationTokenSource dispatchCancellation = new();
         private readonly ManuallyDrivenTaskScheduler? foregroundScheduler;
         private bool enumeratorDisposed;
+        private readonly List<Exception> expectedParentCleanupFailures = [];
+
+        public void ExpectParentCleanupFailure(Exception failure)
+            => this.expectedParentCleanupFailures.Add(failure);
 
         public ControlledDispatchScenario(
             string dispatcherId,
@@ -919,7 +925,17 @@ public sealed class SubAgentDispatcherIntegrationTests
             foregroundScheduler?.DrainAndRunInline();
             foreach (var lease in Factory.Leases.Values)
             {
-                await lease.LocalAgentChat.DisposeAsync();
+                if (this.expectedParentCleanupFailures.Count == 0)
+                    await lease.LocalAgentChat.DisposeAsync();
+                else
+                {
+                    var failure = await Assert.ThrowsAsync<AggregateException>(
+                        () => lease.LocalAgentChat.DisposeAsync().AsTask());
+                    var originals = failure.Flatten().InnerExceptions;
+                    Assert.Equal(this.expectedParentCleanupFailures.Count, originals.Count);
+                    foreach (var expected in this.expectedParentCleanupFailures)
+                        Assert.Single(originals, error => ReferenceEquals(expected, error));
+                }
             }
             dispatchCancellation.Dispose();
             timeout.Dispose();
