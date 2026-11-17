@@ -77,7 +77,7 @@ public sealed class McpAgentIntegrationTests
                 AgentDefinition = agent,
             });
 
-        await WaitForPingToolAsync(chat);
+        await chat.Initialization.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(HasPingTool(chat));
 
         var failedServer = FindToolByName(chat.Tools, "bad-server");

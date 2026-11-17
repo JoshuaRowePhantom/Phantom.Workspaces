@@ -162,6 +162,11 @@ public sealed class McpToolIntegrationTests
         });
 
         using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await chat.Initialization.WaitAsync(requestTimeout.Token);
+        var serverNode = Assert.Single(chat.Tools, tool => tool.Name == "test-mcp");
+        Assert.True(serverNode.IsEnabled, serverNode.Status);
+        Assert.Contains(serverNode.Children, tool =>
+            tool.IsEnabled && string.Equals(tool.Name, "ping", StringComparison.OrdinalIgnoreCase));
         chat.EnqueueUserMessage("hello");
         await client.WaitForRequestAsync(requestTimeout.Token);
 
@@ -311,10 +316,20 @@ public sealed class McpToolIntegrationTests
             await using var server = await TestMcpServerProcess.StartAsync();
 
             var provider = new Secrets.ManifestAccessTestBroker { Material = "secret-gated-token" };
+            var acquired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var broker = new Mock<IAccessBroker>(MockBehavior.Strict);
+            broker.Setup(value => value.AcquireAsync(
+                    It.IsAny<StoredSecretAccessRequest>(), It.IsAny<CancellationToken>()))
+                .Returns(async (StoredSecretAccessRequest storedRequest, CancellationToken cancellationToken) =>
+                {
+                    var result = await provider.AcquireAsync(storedRequest, cancellationToken);
+                    acquired.TrySetResult();
+                    return result;
+                });
 
             await using var cache = new AgentChatSessionCache(new AgentServices
             {
-                AccessBroker = provider,
+                AccessBroker = broker.Object,
                 AgentPersistenceStoreOverride = new InMemoryAgentPersistenceStore(),
             });
 
@@ -346,7 +361,10 @@ public sealed class McpToolIntegrationTests
             {
             }
 
-            Assert.NotEmpty(provider.Requests);
+            await acquired.Task.WaitAsync(timeout.Token);
+            Assert.Equal("GitHubToken", Assert.Single(provider.Requests).Reference.Name);
+            broker.Verify(value => value.AcquireAsync(
+                It.IsAny<StoredSecretAccessRequest>(), It.IsAny<CancellationToken>()), Times.Once);
         }
         finally
         {
