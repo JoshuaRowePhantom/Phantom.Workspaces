@@ -61,7 +61,7 @@ public sealed class AgentViewModelNavigationTests
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
-        await WaitForMcpToolsLoadedAsync(chat);
+        await WaitForMcpToolProjectionAsync(chat, viewModel);
 
         var toolsNode = viewModel.EditorItems.Single().Children.Single(c => c.Id == "chat-tools");
         var topLevelMcpItem = Assert.Single(toolsNode.Children);
@@ -77,7 +77,7 @@ public sealed class AgentViewModelNavigationTests
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
-        await WaitForMcpToolsLoadedAsync(chat);
+        await WaitForMcpToolProjectionAsync(chat, viewModel);
 
         var toolsNode = viewModel.EditorItems.Single().Children.Single(c => c.Id == "chat-tools");
         var topLevelMcpItem = Assert.Single(toolsNode.Children);
@@ -139,40 +139,18 @@ public sealed class AgentViewModelNavigationTests
                 AgentDefinition = CreateMcpAgentDefinition(mcpEndpoint),
             });
 
-    private static async Task WaitForMcpToolsLoadedAsync(AgentChat chat)
+    private static async Task WaitForMcpToolProjectionAsync(AgentChat chat, AgentViewModel viewModel)
     {
-        if (HasChildTools(chat))
-        {
-            return;
-        }
-
-        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnToolsChanged(object? _, EventArgs __)
-        {
-            if (HasChildTools(chat))
-            {
-                signal.TrySetResult();
-            }
-        }
-
-        chat.ToolsChanged += OnToolsChanged;
-        try
-        {
-            if (HasChildTools(chat))
-            {
-                return;
-            }
-
-            await signal.Task;
-        }
-        finally
-        {
-            chat.ToolsChanged -= OnToolsChanged;
-        }
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        // Final discovery publication enqueues the owned projection before its idle task is read.
+        await chat.Initialization.WaitAsync(timeout.Token);
+        var server = Assert.Single(chat.GetToolSnapshot(), tool => tool.Name == "test-mcp");
+        Assert.True(server.IsEnabled, server.Status);
+        Assert.Contains(server.Children, tool =>
+            tool.IsEnabled && string.Equals(tool.Name, "ping", StringComparison.OrdinalIgnoreCase));
+        await viewModel.ToolProjectionIdle.WaitAsync(timeout.Token);
     }
-
-    private static bool HasChildTools(AgentChat chat)
-        => chat.GetToolSnapshot().Any(t => t.Children.Count > 0);
 
     // ── Sub-agent navigation tests ─────────────────────────────────────────────
 
