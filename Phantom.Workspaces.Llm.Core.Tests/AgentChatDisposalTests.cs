@@ -10,6 +10,41 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class AgentChatDisposalTests
 {
     [Fact]
+    public async Task FactoryDisposal_PreservesEveryIndependentDeferredSelfTerminationFailure()
+    {
+        var clients = new[] { new SelfTerminatingClient(true), new SelfTerminatingClient(true) };
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(),
+            new AgentServices(), scheduler.ExclusiveScheduler);
+        foreach (var client in clients)
+        {
+            var sessionId = new Phantom.Workspaces.Llm.Interfaces.AgentSessionId(Guid.NewGuid().ToString());
+            var lease = await factory.GetOrCreateAsync(sessionId,
+                AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson),
+                new AgentServices { ChatClientOverride = client });
+            client.Close = () => factory.TerminateExactAsync(sessionId, lease.AgentChat);
+            lease.LocalAgentChat.EnqueueUserMessage("close yourself");
+        }
+        await Task.WhenAll(clients.Select(client => client.Closed.Task));
+        var disposing = factory.DisposeAsync().AsTask();
+        try
+        {
+            Assert.False(disposing.IsCompleted);
+            foreach (var client in clients) client.Release.TrySetResult();
+            var failure = await Assert.ThrowsAsync<AggregateException>(() => disposing);
+            var originals = failure.Flatten().InnerExceptions;
+            Assert.Equal(2, originals.Count);
+            foreach (var client in clients)
+                Assert.Single(originals, error => ReferenceEquals(error, client.Failure));
+        }
+        finally
+        {
+            foreach (var client in clients) client.Release.TrySetResult();
+            await disposing.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ContinueOnCapturedContext);
+        }
+    }
+
+    [Fact]
     public async Task FactorySelfTermination_CancellationFailureStillDrainsAndPreservesIndependentFailures()
     {
         var client = new SelfTerminatingClient(fails: true, cancellationFails: true);

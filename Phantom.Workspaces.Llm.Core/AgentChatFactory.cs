@@ -777,7 +777,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
             _gate.Release();
         }
 
-        await Task.WhenAll(toDispose.Select(async entry =>
+        var cleanup = Task.WhenAll(toDispose.Select(async entry =>
         {
             if (entry.ProviderRequestedTermination)
             {
@@ -798,6 +798,11 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IRestartableR
                 await pending.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             await entry.AgentChat.DisposeAsync().ConfigureAwait(false);
         }));
+        try { await cleanup.ConfigureAwait(false); }
+        catch (Exception) when (cleanup.Exception?.InnerExceptions.Count > 1)
+        {
+            throw cleanup.Exception!;
+        }
     }
 
     private Task PostToForegroundAsync(Action action)
