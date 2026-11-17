@@ -52,6 +52,33 @@ public sealed class RemoteAgentQueuePublicationTests
     }
 
     [Fact]
+    public async Task CommandSnapshot_CoversDeferredQueueNotification_PreservesPublicationToEveryLease()
+    {
+        var scheduler = new QueuedScheduler();
+        var manager = new AgentInputQueueManager();
+        var queue = new AgentInputQueue();
+        manager.RegisterInputQueue(queue);
+        using var adapter = new LocalAgentInputQueuesAdapter(manager, queue, scheduler);
+        await using var first = Lease(adapter);
+        await using var second = Lease(adapter);
+        var firstCursor = new ReplayCursor { Epoch = first.Epoch, Sequence = first.Replay.HighWaterMark };
+        var secondCursor = new ReplayCursor { Epoch = second.Epoch, Sequence = second.Replay.HighWaterMark };
+        var result = await adapter.EnqueueAsync(
+            Request(queue, adapter.Snapshot.Revision, "command snapshot"), TestContext.Current.CancellationToken);
+        Assert.Equal(AgentInputQueueCommandStatus.Applied, result.Status);
+        Assert.Equal(adapter.Snapshot.Revision, result.CurrentSnapshot!.Value.Revision);
+        Assert.DoesNotContain(first.Replay.ReadAfter(firstCursor).Frames, frame => frame.Type == "queue-changed");
+        scheduler.Drain();
+        foreach (var (lease, cursor) in new[] { (first, firstCursor), (second, secondCursor) })
+        {
+            var delta = Assert.Single(lease.Replay.ReadAfter(cursor).Frames
+                .Select(AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize).OfType<QueueChangedEvent>());
+            Assert.Equal(result.Revision, delta.Revision);
+            Assert.Single(delta.Queues.Single(value => value.IsDefault).Items);
+        }
+    }
+
+    [Fact]
     public async Task ReentrantAggregateObserver_RemoteLeasePublishesCapturedSnapshotsInRevisionOrder()
     {
         var manager = new AgentInputQueueManager();

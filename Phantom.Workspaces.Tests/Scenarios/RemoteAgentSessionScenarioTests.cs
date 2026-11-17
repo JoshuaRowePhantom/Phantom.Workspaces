@@ -600,6 +600,190 @@ public sealed class RemoteAgentSessionScenarioTests
             value => value.GetRawText().Contains("steer", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task QueueCommand_ResponseBeforeDeferredNotification_PreservesProjectionAndConflictContract(
+        bool conflict, bool activeEnqueue)
+    {
+        var scheduler = new QueueNotificationGateScheduler();
+        var projectionScheduler = new QueueNotificationGateScheduler();
+        await using var fixture = await ScenarioFixture.CreateWithSchedulerAsync(
+            scheduler, Session("deferred-queue", background: true));
+        await using var proxy = await fixture.OpenProxyAsync("deferred-queue", AgentSessionOpenIntent.Start,
+            foregroundScheduler: projectionScheduler);
+        var initiatingChannel = fixture.Listener.LastChannel;
+        var attachmentSnapshot = NextFrameAppliedAsync(proxy, "session-snapshot");
+        await using var observer = await fixture.OpenProxyAsync("deferred-queue", AgentSessionOpenIntent.Attach);
+        await attachmentSnapshot;
+        var owner = await fixture.OwnerChatAsync("deferred-queue", 0);
+        Func<Task>? finishActive = null;
+        string? heldQueueId = null;
+        if (activeEnqueue)
+        {
+            var heldPublished = NextFrameAppliedAsync(proxy, "queue-changed");
+            await proxy.Chat.InputQueues.CreateQueueAsync(
+                CreateQueue("held", 0, AgentInputQueueImmediacy.Held), TestContext.Current.CancellationToken);
+            await heldPublished;
+            heldQueueId = proxy.Chat.InputQueues.Snapshot.Queues.Single(q => q.Name == "held").QueueId;
+            var stream = fixture.Model.EnqueueStreamingResponse();
+            stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "working"));
+            var terminal = stream.Complete(isReady: false);
+            var running = WaitForRunningItemsAsync(owner, 1);
+            owner.EnqueueUserMessage("begin active turn");
+            await stream.WaitForClaimedAsync(TestContext.Current.CancellationToken);
+            await running;
+            await WaitForBusyStateAsync(proxy.Chat, isBusy: true);
+            await WaitForQueueRevisionAsync(proxy.Chat, ((IAgentChat)owner).InputQueues.Snapshot.Revision);
+            await WaitForQueueRevisionAsync(observer.Chat, ((IAgentChat)owner).InputQueues.Snapshot.Revision);
+            var idle = WaitForRunningItemsAsync(owner, 0);
+            finishActive = async () =>
+            {
+                terminal.MarkReady();
+                await terminal.WaitForClaimedAsync(TestContext.Current.CancellationToken);
+                await idle;
+                await WaitForQueueRevisionAsync(proxy.Chat, ((IAgentChat)owner).InputQueues.Snapshot.Revision);
+            };
+        }
+        var baselineRevision = proxy.Chat.InputQueues.Snapshot.Revision;
+        var notifications = 0;
+        proxy.Chat.InputQueues.Changed += (_, _) => notifications++;
+        var chronology = new List<object>();
+        var captureLock = new object();
+        var consumedRevision = baselineRevision;
+        AgentSessionServerFrame? receivedFrame = null;
+        void Capture(string phase, int? task = null, Exception? failure = null)
+        {
+            lock (captureLock)
+            {
+                var inputQueues = typeof(RemoteAgentChat).GetField("inputQueues",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(proxy.Chat)!;
+                var stream = inputQueues.GetType().GetField("streamRevision",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(inputQueues);
+                chronology.Add(new
+                {
+                    Index = chronology.Count, Phase = phase, Task = task,
+                    Epoch = receivedFrame?.RuntimeEpoch ?? proxy.Client.LastAppliedCursor?.Epoch,
+                    Sequence = receivedFrame?.Sequence ?? proxy.Client.LastAppliedCursor?.Sequence,
+                    Correlation = receivedFrame?.CorrelationId, Type = receivedFrame?.Type,
+                    VisibleRevision = proxy.Chat.InputQueues.Snapshot.Revision,
+                    ConsumedStreamRevision = stream ?? consumedRevision,
+                    Queues = proxy.Chat.InputQueues.Snapshot.Queues.Select(q => new { q.QueueId, q.Revision }).ToArray(),
+                    Failure = failure?.GetType().Name,
+                });
+            }
+        }
+        void Receive(object? sender, AgentSessionServerFrame frame)
+        {
+            lock (captureLock)
+            {
+                receivedFrame = frame;
+                Capture("frame-received");
+                var value = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame);
+                if (value is QueueChangedEvent delta)
+                    chronology.Add(new { Index = chronology.Count, DeltaRevision = delta.Revision,
+                        Removed = delta.RemovedQueueIds,
+                        Queues = delta.Queues.Select(q => new { q.QueueId, q.Revision }).ToArray() });
+                if (value is CommandCompletedEvent completed && completed.Result is { } result)
+                {
+                    var commandResult = JsonSerializer.Deserialize<AgentInputQueueCommandResult>(
+                        result.GetRawText(), AgentSessionProtocolCodec.Options);
+                    chronology.Add(new { Index = chronology.Count, completed.CommandId,
+                        commandResult.Status, commandResult.Revision,
+                        SnapshotRevision = commandResult.CurrentSnapshot?.Revision });
+                }
+            }
+        }
+        proxy.Client.FrameReceived += Receive;
+        projectionScheduler.Observe = Capture;
+        Capture("full-snapshot-baseline");
+        scheduler.Pause();
+        try
+        {
+            if (conflict)
+                ((IAgentChat)owner).InputQueues.CreateQueue(CreateQueue("owner", 0, AgentInputQueueImmediacy.Held));
+            Capture("command-start");
+            var command = activeEnqueue
+                ? proxy.Chat.InputQueues.EnqueueAsync(Enqueue(heldQueueId!, "during", baselineRevision),
+                    TestContext.Current.CancellationToken)
+                : proxy.Chat.InputQueues.CreateQueueAsync(
+                    CreateQueue("remote", baselineRevision, AgentInputQueueImmediacy.Held), TestContext.Current.CancellationToken);
+            if (conflict)
+                Assert.Equal("conflict", (await Assert.ThrowsAsync<RemoteAgentSessionException>(() => command)).Code);
+            else
+            {
+                Assert.Equal(AgentInputQueueCommandStatus.Applied, (await command).Status);
+                Assert.Equal(baselineRevision + 1, proxy.Chat.InputQueues.Snapshot.Revision);
+                Assert.Equal(1, notifications);
+            }
+            Capture("command-settled");
+            Assert.Equal(baselineRevision, observer.Chat.InputQueues.Snapshot.Revision);
+            projectionScheduler.Pause();
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnQueue(object? sender, AgentSessionServerFrame frame)
+            {
+                if (frame.Type == "queue-changed") received.TrySetResult();
+            }
+            proxy.Client.FrameReceived += OnQueue;
+            try
+            {
+                var projected = NextFrameAppliedAsync(proxy, "queue-changed");
+                var observed = NextFrameAppliedAsync(observer, "queue-changed");
+                scheduler.Resume();
+                await received.Task.WaitAsync(TestContext.Current.CancellationToken);
+                Capture("covered-delta-enqueued-before-application");
+                projectionScheduler.Resume();
+                await projected;
+                consumedRevision = baselineRevision + 1;
+                await observed;
+            }
+            finally { proxy.Client.FrameReceived -= OnQueue; }
+            Assert.Equal(1, notifications);
+            AssertQueueStateEqual(((IAgentChat)owner).InputQueues.Snapshot, proxy.Chat.InputQueues.Snapshot);
+            AssertQueueStateEqual(((IAgentChat)owner).InputQueues.Snapshot, observer.Chat.InputQueues.Snapshot);
+            if (finishActive is not null)
+            {
+                Capture("active-enqueue-settled");
+                await finishActive();
+                Capture("idle-before-future-enqueue");
+                await proxy.Chat.InputQueues.EnqueueAsync(Enqueue(
+                    heldQueueId!, "future", proxy.Chat.InputQueues.Snapshot.Revision), TestContext.Current.CancellationToken);
+                Assert.False(proxy.Chat.IsBusy);
+                Assert.Empty(proxy.Chat.RunningItems);
+                Assert.Equal(2, initiatingChannel.ReceivedMessages
+                    .Select(AgentSessionProtocolCodec.DeserializeCommand).OfType<EnqueueInputCommand>().Count());
+                Capture("future-enqueue-settled");
+            }
+            Capture("disposal-start");
+            await proxy.DisposeAsync();
+            Capture("disposal-complete");
+        }
+        finally
+        {
+            scheduler.Resume();
+            projectionScheduler.Resume();
+            projectionScheduler.Observe = null;
+            proxy.Client.FrameReceived -= Receive;
+            lock (captureLock)
+                TestContext.Current.TestOutputHelper!.WriteLine(JsonSerializer.Serialize(chronology));
+        }
+    }
+
+    private static async Task NextFrameAppliedAsync(ProxyHandle proxy, string frameType)
+    {
+        var received = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFrame(object? sender, AgentSessionServerFrame frame)
+        {
+            if (frame.Type != frameType) return;
+            received.TrySetResult((Task)typeof(RemoteAgentChat).GetField("frameApplication",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(proxy.Chat)!);
+        }
+        proxy.Client.FrameReceived += OnFrame;
+        try { await await received.Task.WaitAsync(TestContext.Current.CancellationToken); }
+        finally { proxy.Client.FrameReceived -= OnFrame; }
+    }
+
     [Fact]
     public async Task PersistedSession_SourceQueue_AgentResultPublishesToRemoteProjection()
     {
@@ -1773,6 +1957,50 @@ public sealed class RemoteAgentSessionScenarioTests
         }
     }
 
+    private sealed class QueueNotificationGateScheduler : TaskScheduler
+    {
+        private readonly object gate = new();
+        private readonly Queue<Task> tasks = new();
+        private bool paused;
+        internal Action<string, int?, Exception?>? Observe { get; set; }
+        internal void Pause() { lock (this.gate) this.paused = true; }
+        internal void Resume()
+        {
+            Task[] pending;
+            lock (this.gate)
+            {
+                this.paused = false;
+                pending = this.tasks.ToArray();
+                this.tasks.Clear();
+            }
+            foreach (var task in pending) this.Execute(task);
+        }
+        private void Execute(Task task)
+        {
+            this.Observe?.Invoke("foreground-apply-before", task.Id, null);
+            Assert.True(this.TryExecuteTask(task));
+            this.Observe?.Invoke("foreground-apply-after", task.Id, task.Exception?.InnerException);
+        }
+        protected override IEnumerable<Task>? GetScheduledTasks()
+        {
+            lock (this.gate) return this.tasks.ToArray();
+        }
+        protected override void QueueTask(Task task)
+        {
+            this.Observe?.Invoke("foreground-enqueue", task.Id, null);
+            lock (this.gate)
+            {
+                if (this.paused)
+                {
+                    this.tasks.Enqueue(task);
+                    return;
+                }
+            }
+            ThreadPool.QueueUserWorkItem(_ => this.Execute(task));
+        }
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+    }
+
     private sealed class ScenarioFixture : IAsyncDisposable
     {
         internal const string DefaultOwner = "11111111-1111-1111-1111-111111111111";
@@ -1787,14 +2015,14 @@ public sealed class RemoteAgentSessionScenarioTests
         private readonly Dictionary<string, EntityId> sessionEntities = new(StringComparer.Ordinal);
         private readonly List<ReconnectableLocalTransport> transports = [];
 
-        private ScenarioFixture()
+        private ScenarioFixture(TaskScheduler? ownerScheduler = null)
         {
             this.data = new InMemoryDataAccessLayer(timeProvider: this.Time);
             this.Persistence = new InMemoryAgentPersistenceStore(this.Time);
             this.chatFactory = new AgentChatFactory(
                 this.Persistence,
                 new AgentServices { ChatClientOverride = this.Model },
-                TaskScheduler.Default);
+                ownerScheduler ?? TaskScheduler.Default);
             this.runningChats = new RunningAgentChatTable(this.chatFactory);
             this.runtimes = new RemoteAgentSessionRuntimeRegistry(Time);
             var runtimeFactory = new DataAccessAgentSessionRuntimeHostFactory(
@@ -1965,6 +2193,14 @@ public sealed class RemoteAgentSessionScenarioTests
             }, TestContext.Current.CancellationToken);
             Assert.Empty(Assert.Single(result.EntityResults).Errors);
             this.sessionEntities.Add(session.SessionId, entityId);
+        }
+
+        internal static async Task<ScenarioFixture> CreateWithSchedulerAsync(TaskScheduler scheduler, params ScenarioSession[] sessions)
+        {
+            var fixture = new ScenarioFixture(scheduler);
+            foreach (var session in sessions)
+                await fixture.SeedAsync(session);
+            return fixture;
         }
 
         internal ReconnectableLocalTransport CreateTransport()

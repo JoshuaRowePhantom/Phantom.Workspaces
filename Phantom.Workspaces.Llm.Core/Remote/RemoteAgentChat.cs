@@ -429,7 +429,7 @@ public sealed class RemoteAgentChat : IAgentChat
             case SessionSnapshotEvent e:
                 var acknowledgesReplacement = this.appliedRuntimeEpoch is { } previousEpoch
                     && previousEpoch != frame.RuntimeEpoch;
-                this.ApplySnapshot(e.Snapshot);
+                this.ApplySnapshot(e.Snapshot, frame.RuntimeEpoch);
                 this.appliedRuntimeEpoch = frame.RuntimeEpoch;
                 this.initialized.TrySetResult();
                 if (acknowledgesReplacement)
@@ -545,7 +545,7 @@ public sealed class RemoteAgentChat : IAgentChat
         }
     }
 
-    private void ApplySnapshot(AgentSessionSnapshot snapshot)
+    private void ApplySnapshot(AgentSessionSnapshot snapshot, RuntimeEpoch epoch)
     {
         ProtocolValueValidator.Validate(snapshot.Information);
         ProtocolValueValidator.Validate(snapshot.Usage);
@@ -569,7 +569,7 @@ public sealed class RemoteAgentChat : IAgentChat
             this.runningById.Add(state.RunId, running);
             this.RunningItems.Add(running);
         }
-        this.inputQueues.Replace(snapshot.InputQueues);
+        this.inputQueues.Reset(snapshot.InputQueues, epoch);
         this.ReplaceTools(snapshot.Tools);
         this.ReplaceSubagents(snapshot.Subagents);
         this.ReconcileModals(snapshot.Modals);
@@ -715,6 +715,9 @@ public sealed class RemoteAgentChat : IAgentChat
         private readonly List<(long Revision, TaskCompletionSource Completion)> revisionWaiters = [];
         private readonly HashSet<IOwnedOperation> operations = [];
         private AgentInputQueuesSnapshot snapshot;
+        private long streamRevision;
+        private long snapshotCoverageRevision;
+        private RuntimeEpoch runtimeEpoch;
         private Exception? stoppedFailure;
         private bool accepting = true;
 
@@ -746,7 +749,19 @@ public sealed class RemoteAgentChat : IAgentChat
         public AgentInputQueueCommandResult Move(MoveAgentInputQueueItemRequest request) => throw RemoteOnly();
         public AgentInputQueueCommandResult Configure(ConfigureAgentInputQueueRequest request) => throw RemoteOnly();
 
-        internal void Replace(AgentInputQueuesSnapshot value)
+        internal void Reset(AgentInputQueuesSnapshot value, RuntimeEpoch epoch)
+        {
+            AgentInputQueueSnapshotValidator.Validate(value);
+            lock (this.sync)
+            {
+                this.runtimeEpoch = epoch;
+                this.streamRevision = value.Revision;
+                this.snapshotCoverageRevision = value.Revision;
+            }
+            this.Replace(value);
+        }
+
+        private void Replace(AgentInputQueuesSnapshot value)
         {
             AgentInputQueueSnapshotValidator.Validate(value);
             List<TaskCompletionSource> completed;
@@ -769,8 +784,14 @@ public sealed class RemoteAgentChat : IAgentChat
 
         internal void ApplyDelta(QueueChangedEvent value)
         {
-            if (value.Revision <= this.snapshot.Revision)
+            // Validated command snapshots cover state without consuming its ordered events.
+            if (value.Revision <= this.streamRevision)
                 throw new RemoteAgentProtocolException("Queue revision did not advance.");
+            if (value.Revision <= this.snapshotCoverageRevision)
+            {
+                this.streamRevision = value.Revision;
+                return;
+            }
             var next = this.snapshot.Queues.ToDictionary(q => q.QueueId, StringComparer.Ordinal);
             foreach (var id in value.RemovedQueueIds) next.Remove(id);
             foreach (var queue in value.Queues) next[queue.QueueId] = queue;
@@ -779,6 +800,7 @@ public sealed class RemoteAgentChat : IAgentChat
                 Revision = value.Revision,
                 Queues = next.Values.OrderBy(q => q.IsImmediate ? 0 : q.IsDefault ? 1 : 2).ThenBy(q => q.QueueId).ToImmutableArray(),
             });
+            this.streamRevision = value.Revision;
         }
 
         internal void StopAccepting(Exception failure)
@@ -817,8 +839,9 @@ public sealed class RemoteAgentChat : IAgentChat
                     return CreateObservedFailure<AgentInputQueueCommandResult>(
                         this.stoppedFailure ?? new ObjectDisposedException(nameof(RemoteAgentChat)));
 
+                var epoch = this.runtimeEpoch;
                 owned = new OwnedOperation<AgentInputQueueCommandResult>(
-                    () => this.ExecuteCoreAsync(operation, ct),
+                    () => this.ExecuteCoreAsync(operation, ct, epoch),
                     this.CompleteOperation);
                 this.operations.Add(owned);
             }
@@ -828,15 +851,21 @@ public sealed class RemoteAgentChat : IAgentChat
         }
 
         private async Task<AgentInputQueueCommandResult> ExecuteCoreAsync(
-            Func<Task<AgentInputQueueCommandResult>> operation, CancellationToken ct)
+            Func<Task<AgentInputQueueCommandResult>> operation, CancellationToken ct, RuntimeEpoch epoch)
         {
             var result = await operation().ConfigureAwait(false);
             if (result.CurrentSnapshot is { } current)
             {
                 await queueForeground(() =>
                 {
-                    if (current.Revision >= this.snapshot.Revision)
+                    AgentInputQueueSnapshotValidator.Validate(current);
+                    // Replacement runtimes have independent revision spaces; same-runtime
+                    // resync still permits a genuinely newer pending command snapshot.
+                    if (epoch == this.runtimeEpoch && current.Revision > this.snapshot.Revision)
+                    {
+                        this.snapshotCoverageRevision = current.Revision;
                         this.Replace(current);
+                    }
                 }).ConfigureAwait(false);
                 return result;
             }
