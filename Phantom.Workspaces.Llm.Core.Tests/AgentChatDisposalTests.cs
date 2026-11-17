@@ -2,12 +2,68 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
 using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class AgentChatDisposalTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DisposeAsync_RetainedTerminalAndIndependentCleanupFailures_ReportEachOriginalOnce(bool independentCleanupFails)
+    {
+        var terminal = new IOException("native request failed");
+        var independent = new IOException("native request failed");
+        var native = new FakeCopilotSession
+        {
+            SendHandler = (_, _) => Task.FromException(terminal),
+        };
+        var client = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        client.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var scheduler = new ConcurrentExclusiveSchedulerPair();
+        var resource = new FailureResource(independentCleanupFails
+            ? new AggregateException(terminal, independent)
+            : terminal);
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            ForegroundScheduler = scheduler.ExclusiveScheduler,
+            AgentServices = new AgentServices
+            {
+                RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory(),
+            },
+            OwnedResources = [resource],
+        });
+
+        var completion = chat.EnqueueUserMessageWithCompletion("request");
+        Assert.Same(terminal, await Assert.ThrowsAsync<IOException>(() => completion.Settlement));
+        var failure = await Assert.ThrowsAsync<AggregateException>(() => chat.DisposeAsync().AsTask());
+
+        Assert.Equal<Exception>(
+            independentCleanupFails ? [terminal, independent] : [terminal],
+            failure.Flatten().InnerExceptions);
+        Assert.Equal(1, resource.Disposals);
+        Assert.Equal(0, native.SubscriberCount);
+        Assert.Equal(1, native.SendAsyncCallCount);
+        await chat.DisposeAsync();
+        Assert.Equal(1, resource.Disposals);
+    }
+
+    private sealed class FailureResource(Exception failure) : IAsyncDisposable
+    {
+        public int Disposals { get; private set; }
+
+        public ValueTask DisposeAsync()
+        {
+            this.Disposals++;
+            return ValueTask.FromException(failure);
+        }
+    }
+
     [Fact]
     public async Task AgentChat_Dispose_DoesNotHang()
     {

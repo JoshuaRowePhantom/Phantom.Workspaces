@@ -253,14 +253,15 @@ public sealed class RemoteSplitSessionByokRoundTripTests
     {
         var listener = new ThrowingListener();
         await using var setup = await SplitSessionSetup.CreateWithListenerAsync(ProfileA, ProfileB, listener);
-        await using var chat = await setup.CreateChatAsync();
+        await AssertFailedChatLifetimeAsync(setup, async (chat, failures) =>
+        {
+            failures.Add(await FailTurnAsync(chat, "throw while opening"));
+            failures.Add(await FailTurnAsync(chat, "retry after rejected open"));
 
-        await CompleteTurnAsync(chat, "throw while opening");
-        await CompleteTurnAsync(chat, "retry after rejected open");
-
-        Assert.Empty(chat.RunningItems);
-        AssertProviderError(chat, "channel");
-        Assert.Equal(2, listener.OpenAttempts);
+            Assert.Empty(chat.RunningItems);
+            AssertProviderError(chat, "channel");
+            Assert.Equal(2, listener.OpenAttempts);
+        });
     }
 
     [Fact]
@@ -268,16 +269,17 @@ public sealed class RemoteSplitSessionByokRoundTripTests
     {
         var listener = new HangingListener();
         await using var setup = await SplitSessionSetup.CreateWithListenerAsync(ProfileA, ProfileB, listener);
-        await using var chat = await setup.CreateChatAsync();
+        await AssertFailedChatLifetimeAsync(setup, async (chat, failures) =>
+        {
+            var completion = chat.EnqueueUserMessageWithCompletion("hang while opening");
+            await listener.Opened.Task.WaitAsync(TestToken());
+            setup.TimeProvider.Advance(StartupTimeout);
+            failures.Add(await Assert.ThrowsAsync<TimeoutException>(() => completion.Settlement.WaitAsync(TestToken())));
 
-        var completion = chat.EnqueueUserMessageWithCompletion("hang while opening");
-        await listener.Opened.Task.WaitAsync(TestToken());
-        setup.TimeProvider.Advance(StartupTimeout);
-        await completion.Settlement.WaitAsync(TestToken());
-
-        Assert.Empty(chat.RunningItems);
-        AssertProviderError(chat, "timed out");
-        await listener.Cancelled.Task.WaitAsync(TestToken());
+            Assert.Empty(chat.RunningItems);
+            AssertProviderError(chat, "timed out");
+            await listener.Cancelled.Task.WaitAsync(TestToken());
+        });
     }
 
     [Fact]
@@ -285,17 +287,17 @@ public sealed class RemoteSplitSessionByokRoundTripTests
     {
         var client = new BlockingCreateCopilotClient();
         await using var setup = await SplitSessionSetup.CreateWithClientAsync(ProfileA, ProfileB, client);
-        await using var chat = await setup.CreateChatAsync();
-        var cleared = RunningItemsClearedAsync(chat);
+        await AssertFailedChatLifetimeAsync(setup, async (chat, failures) =>
+        {
+            var completion = chat.EnqueueUserMessageWithCompletion("close before session-created");
+            await client.CreateStarted.Task.WaitAsync(TestToken());
+            await setup.ChannelAccepted.WaitAsync(TestToken());
+            await setup.Harness.CrashExecutorAsync();
+            failures.Add(await Assert.ThrowsAsync<TransportException>(() => completion.Settlement.WaitAsync(TestToken())));
 
-        chat.EnqueueUserMessage("close before session-created");
-        await client.CreateStarted.Task.WaitAsync(TestToken());
-        await setup.ChannelAccepted.WaitAsync(TestToken());
-        await setup.Harness.CrashExecutorAsync();
-        await cleared.WaitAsync(TestToken());
-
-        Assert.Empty(chat.RunningItems);
-        AssertProviderError(chat, "closed");
+            Assert.Empty(chat.RunningItems);
+            AssertProviderError(chat, "closed");
+        });
     }
 
     [Fact]
@@ -307,17 +309,18 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             AgentId = "",
             Data = new AssistantMessageDeltaData { DeltaContent = "partial-from-worker-b", MessageId = "partial" },
         });
-        await using var chat = await setup.CreateChatAsync();
+        await AssertFailedChatLifetimeAsync(setup, async (chat, failures) =>
+        {
+            var completion = chat.EnqueueUserMessageWithCompletion("disconnect mid-turn");
+            await setup.Session.ReadSentMessageAsync(TestToken());
+            await WaitForRunningTextAsync(chat, "partial-from-worker-b");
+            await setup.Harness.CrashExecutorAsync();
+            failures.Add(await Assert.ThrowsAsync<InvalidOperationException>(() => completion.Settlement.WaitAsync(TestToken())));
 
-        var completion = chat.EnqueueUserMessageWithCompletion("disconnect mid-turn");
-        await setup.Session.ReadSentMessageAsync(TestToken());
-        await WaitForRunningTextAsync(chat, "partial-from-worker-b");
-        await setup.Harness.CrashExecutorAsync();
-        await completion.Settlement.WaitAsync(TestToken());
-
-        Assert.Empty(chat.RunningItems);
-        Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(text => text.Text.Contains("partial-from-worker-b")));
-        AssertProviderError(chat, "closed");
+            Assert.Empty(chat.RunningItems);
+            Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(text => text.Text.Contains("partial-from-worker-b")));
+            AssertProviderError(chat, "closed");
+        });
     }
 
     [Fact]
@@ -340,21 +343,22 @@ public sealed class RemoteSplitSessionByokRoundTripTests
                     MessageId = "partial",
                 },
             });
-            await using var chat = await setup.CreateChatAsync();
+            await AssertFailedChatLifetimeAsync(setup, async (chat, failures) =>
+            {
+                var completion = chat.EnqueueUserMessageWithCompletion("private-interrupted-prompt");
+                await setup.Session.ReadSentMessageAsync(TestToken());
+                await WaitForRunningTextAsync(chat, "private-partial-reply");
+                await setup.Harness.CrashExecutorAsync();
+                failures.Add(await Assert.ThrowsAsync<InvalidOperationException>(() => completion.Settlement.WaitAsync(TestToken())));
 
-            var completion = chat.EnqueueUserMessageWithCompletion("private-interrupted-prompt");
-            await setup.Session.ReadSentMessageAsync(TestToken());
-            await WaitForRunningTextAsync(chat, "private-partial-reply");
-            await setup.Harness.CrashExecutorAsync();
-            await completion.Settlement.WaitAsync(TestToken());
-
-            Assert.Empty(chat.RunningItems);
-            Assert.Contains("Reverse relay closed", ReadLog(Path.Combine(directory, "DAEMON")), StringComparison.Ordinal);
-            var sourceLog = ReadLog(Path.Combine(directory, "SOURCE"));
-            Assert.Contains("Transport receiver terminal", sourceLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("private-interrupted-prompt", sourceLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("private-partial-reply", sourceLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("private-partial-reply", ReadLog(Path.Combine(directory, "SHADE")), StringComparison.Ordinal);
+                Assert.Empty(chat.RunningItems);
+                Assert.Contains("Reverse relay closed", ReadLog(Path.Combine(directory, "DAEMON")), StringComparison.Ordinal);
+                var sourceLog = ReadLog(Path.Combine(directory, "SOURCE"));
+                Assert.Contains("Transport receiver terminal", sourceLog, StringComparison.Ordinal);
+                Assert.DoesNotContain("private-interrupted-prompt", sourceLog, StringComparison.Ordinal);
+                Assert.DoesNotContain("private-partial-reply", sourceLog, StringComparison.Ordinal);
+                Assert.DoesNotContain("private-partial-reply", ReadLog(Path.Combine(directory, "SHADE")), StringComparison.Ordinal);
+            });
         }
         finally
         {
@@ -394,23 +398,24 @@ public sealed class RemoteSplitSessionByokRoundTripTests
             AgentId = "",
             Data = new AssistantMessageDeltaData { DeltaContent = "legitimate-partial", MessageId = "truncated" },
         });
-        await using var chat = await setup.CreateChatAsync();
+        await AssertFailedChatLifetimeAsync(setup, async (chat, failures) =>
+        {
+            var completion = chat.EnqueueUserMessageWithCompletion("provider truncates");
+            await setup.Session.ReadSentMessageAsync(TestToken());
+            await WaitForRunningTextAsync(chat, "legitimate-partial");
+            setup.TimeProvider.Advance(TerminalTimeout);
+            failures.Add(await Assert.ThrowsAsync<InvalidOperationException>(() => completion.Settlement.WaitAsync(TestToken())));
 
-        var completion = chat.EnqueueUserMessageWithCompletion("provider truncates");
-        await setup.Session.ReadSentMessageAsync(TestToken());
-        await WaitForRunningTextAsync(chat, "legitimate-partial");
-        setup.TimeProvider.Advance(TerminalTimeout);
-        await completion.Settlement.WaitAsync(TestToken());
+            Assert.Empty(chat.RunningItems);
+            Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(text => text.Text.Contains("legitimate-partial")));
+            AssertProviderError(chat, "terminal");
 
-        Assert.Empty(chat.RunningItems);
-        Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(text => text.Text.Contains("legitimate-partial")));
-        AssertProviderError(chat, "terminal");
-
-        setup.RecoverySession.EnqueueTextAndIdle("retry-after-truncated-provider");
-        await CompleteTurnAsync(chat, "retry");
-        Assert.Contains(
-            chat.History,
-            item => item.Contents.OfType<TextContent>().Any(text => text.Text == "retry-after-truncated-provider"));
+            setup.RecoverySession.EnqueueTextAndIdle("retry-after-truncated-provider");
+            await CompleteTurnAsync(chat, "retry");
+            Assert.Contains(
+                chat.History,
+                item => item.Contents.OfType<TextContent>().Any(text => text.Text == "retry-after-truncated-provider"));
+        });
     }
 
     [Fact]
@@ -883,6 +888,36 @@ public sealed class RemoteSplitSessionByokRoundTripTests
     {
         var completion = chat.EnqueueUserMessageWithCompletion(prompt);
         await completion.Settlement.WaitAsync(TestToken());
+    }
+
+    private static async Task<Exception> FailTurnAsync(AgentChat chat, string prompt)
+    {
+        var completion = chat.EnqueueUserMessageWithCompletion(prompt);
+        return await Assert.ThrowsAsync<TransportException>(() => completion.Settlement.WaitAsync(TestToken()));
+    }
+
+    private static async Task AssertFailedChatLifetimeAsync(
+        SplitSessionSetup setup,
+        Func<AgentChat, List<Exception>, Task> scenario)
+    {
+        var terminalFailures = new List<Exception>();
+        Exception? scenarioFailure = null;
+        var cleanupFailure = await Record.ExceptionAsync(async () =>
+        {
+            await using var chat = await setup.CreateChatAsync();
+            // Preserve a scenario assertion failure rather than letting await-using replace
+            // it with the independently retained terminal failure during stack unwinding.
+            scenarioFailure = await Record.ExceptionAsync(() => scenario(chat, terminalFailures));
+        });
+        if (scenarioFailure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(scenarioFailure).Throw();
+
+        Assert.NotEmpty(terminalFailures);
+        var cleanup = Assert.IsType<AggregateException>(cleanupFailure);
+        var cleanupFailures = cleanup.Flatten().InnerExceptions;
+        Assert.Equal(terminalFailures.Count, cleanupFailures.Count);
+        foreach (var terminalFailure in terminalFailures)
+            Assert.Single(cleanupFailures, failure => ReferenceEquals(terminalFailure, failure));
     }
 
     private static void AssertSuccessfulTurn(

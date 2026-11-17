@@ -2285,8 +2285,21 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
         catch (Exception error) { failures.Add(error); }
         if (failures.Count != 0)
         {
+            var retainedFailures = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+            Exception? RetainOriginalFailure(Exception failure)
+            {
+                if (failure is not AggregateException { InnerExceptions.Count: > 0 } aggregate)
+                    return retainedFailures.Add(failure) ? failure : null;
+
+                var retained = aggregate.InnerExceptions.Select(RetainOriginalFailure).OfType<Exception>().ToArray();
+                if (retained.Length == 0) return null;
+                return retained.SequenceEqual(aggregate.InnerExceptions, ReferenceEqualityComparer.Instance)
+                    ? aggregate
+                    : new AggregateException(aggregate.Message, retained);
+            }
+
             throw new AggregateException("Agent chat resource cleanup failed.",
-                failures.Distinct<Exception>(ReferenceEqualityComparer.Instance));
+                failures.Select(RetainOriginalFailure).OfType<Exception>());
         }
     }
 

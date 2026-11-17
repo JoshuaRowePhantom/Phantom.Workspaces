@@ -210,16 +210,7 @@ public sealed class AgentFactoryAccessTests
             Mock.Of<IRunningAgentChatFactory>(),
             Mock.Of<ISubAgentTable>());
         await EstablishSessionAsync(client);
-        var baselineSubscriptions = session.SubscriberCount;
-        broker.Context.Authorized = action != CredentialLeaseRequiredActionKind.Authorization;
-        broker.Context.Current = action != CredentialLeaseRequiredActionKind.Reacquisition;
-        if (faultDispatch)
-        {
-            session.OnSubscribe = handler => handler(new SessionErrorEvent
-            {
-                Data = new SessionErrorData { Message = "Dispatch failed.", ErrorType = "fatal" },
-            });
-        }
+        Assert.Equal(1, session.SubscriberCount);
 
         await AssertRefusedTurnAsync();
         var pending = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve")] };
@@ -233,6 +224,24 @@ public sealed class AgentFactoryAccessTests
 
         async Task AssertRefusedTurnAsync()
         {
+            broker.Context.BeforeValidationAsync = null;
+            broker.Context.Authorized = true;
+            broker.Context.Current = true;
+            await EstablishSessionAsync(client);
+            Assert.Equal(1, session.SubscriberCount);
+            var dispatchFailed = loggerFactory.ObserveFailure();
+            broker.Context.BeforeValidationAsync = async _ =>
+            {
+                broker.Context.Authorized = action != CredentialLeaseRequiredActionKind.Authorization;
+                broker.Context.Current = action != CredentialLeaseRequiredActionKind.Reacquisition;
+                if (faultDispatch)
+                {
+                    var receipts = (CopilotSdkRootEventQueue)typeof(CopilotSdkChatClient)
+                        .GetField("rootEventQueue", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client)!;
+                    receipts.Fail(loggerFactory.Failure);
+                    await dispatchFailed;
+                }
+            };
             await using var updates = client.GetStreamingResponseAsync(
                 [new ChatMessage(ChatRole.User, "continue")]).GetAsyncEnumerator();
             AgentCredentialAccessException refusal;
@@ -250,7 +259,8 @@ public sealed class AgentFactoryAccessTests
 
             Assert.Equal(action, refusal.RequiredAction);
             Assert.NotNull(refusal.RequestIdentifier);
-            Assert.Equal(baselineSubscriptions, session.SubscriberCount);
+            Assert.Equal(0, session.SubscriberCount);
+            Assert.False(client.HasPendingRootContinuation);
             Assert.Equal(0, session.SendAsyncCallCount);
             Assert.Null(typeof(CopilotSdkChatClient)
                 .GetField("currentRouter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
@@ -277,8 +287,15 @@ public sealed class AgentFactoryAccessTests
             Mock.Of<ISubAgentTable>());
         await EstablishSessionAsync(client);
         var baselineSubscriptions = session.SubscriberCount;
+        Assert.Equal(1, baselineSubscriptions);
         using var cancellation = new CancellationTokenSource();
-        session.OnSubscribe = _ => cancellation.Cancel();
+        CancellationToken observedToken = default;
+        broker.Context.BeforeValidationAsync = token =>
+        {
+            observedToken = token;
+            cancellation.Cancel();
+            return ValueTask.CompletedTask;
+        };
 
         await using var updates = client.GetStreamingResponseAsync(
             [new ChatMessage(ChatRole.User, "continue")],
@@ -286,14 +303,23 @@ public sealed class AgentFactoryAccessTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await updates.MoveNextAsync());
 
         Assert.True(cancellation.IsCancellationRequested);
+        Assert.True(observedToken.CanBeCanceled);
+        Assert.True(observedToken.IsCancellationRequested);
         Assert.Equal(baselineSubscriptions, session.SubscriberCount);
         Assert.Equal(0, session.SendAsyncCallCount);
+        Assert.False(client.HasPendingRootContinuation);
         Assert.Null(typeof(CopilotSdkChatClient)
             .GetField("currentRouter", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(client));
         var pending = new AgentInputItem { Messages = [new ChatMessage(ChatRole.User, "preserve after cancellation")] };
         queues.Enqueue(queues.ImmediateQueue, [pending]);
         Assert.Same(pending, Assert.Single(queues.ImmediateQueue.Items));
         Assert.Single(broker.StoredRequests);
+        broker.Context.BeforeValidationAsync = null;
+        await EstablishSessionAsync(client);
+        Assert.Single(session.CreateSessionConfigs);
+        Assert.Equal(1, session.SubscriberCount);
+        await client.DisposeAsync();
+        Assert.Equal(0, session.SubscriberCount);
     }
 
     [Fact]
@@ -704,12 +730,19 @@ public sealed class AgentFactoryAccessTests
     private sealed class FaultingDispatchLoggerFactory : ILoggerFactory
     {
         internal Exception Failure { get; } = new InvalidOperationException("Dispatch logger failed.");
+        private TaskCompletionSource failureObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public ILogger CreateLogger(string categoryName) => new FaultingDispatchLogger(this.Failure);
+        internal Task ObserveFailure()
+        {
+            this.failureObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return this.failureObserved.Task;
+        }
+
+        public ILogger CreateLogger(string categoryName) => new FaultingDispatchLogger(this);
         public void AddProvider(ILoggerProvider provider) { }
         public void Dispose() { }
 
-        private sealed class FaultingDispatchLogger(Exception failure) : ILogger
+        private sealed class FaultingDispatchLogger(FaultingDispatchLoggerFactory owner) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
             public bool IsEnabled(LogLevel logLevel) => true;
@@ -722,7 +755,8 @@ public sealed class AgentFactoryAccessTests
             {
                 if (logLevel == LogLevel.Error)
                 {
-                    throw failure;
+                    owner.failureObserved.TrySetResult();
+                    throw owner.Failure;
                 }
             }
         }
@@ -910,6 +944,7 @@ internal sealed class AgentAccessTestBroker : IAccessBroker
         private int validations;
         public bool Authorized { get; set; } = true;
         public bool Current { get; set; } = true;
+        public Func<CancellationToken, ValueTask>? BeforeValidationAsync { get; set; }
         public int Validations => Volatile.Read(ref this.validations);
         public IReleaseAuthorizationPolicy Policy { get; }
 
@@ -920,12 +955,17 @@ internal sealed class AgentAccessTestBroker : IAccessBroker
                 It.IsAny<ReleaseAuthorizationIdentifier>(),
                 It.IsAny<ReleasePolicyRequest>(),
                 It.IsAny<CancellationToken>()))
-                .Returns(() =>
+                .Returns(async (
+                    ReleaseAuthorizationIdentifier authorization,
+                    ReleasePolicyRequest request,
+                    CancellationToken cancellationToken) =>
                 {
                     Interlocked.Increment(ref this.validations);
-                    return ValueTask.FromResult(this.Authorized
+                    if (this.BeforeValidationAsync is { } beforeValidation)
+                        await beforeValidation(cancellationToken);
+                    return this.Authorized
                         ? ReleaseAuthorizationValidation.Valid
-                        : ReleaseAuthorizationValidation.AuthorizationRequired);
+                        : ReleaseAuthorizationValidation.AuthorizationRequired;
                 });
             this.Policy = policy.Object;
         }
