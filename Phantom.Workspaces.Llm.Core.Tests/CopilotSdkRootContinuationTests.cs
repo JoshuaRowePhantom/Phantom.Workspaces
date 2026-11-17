@@ -5,11 +5,164 @@ using Phantom.Workspaces.Llm.Interfaces;
 using MongoDB.Bson;
 using System.Text.Json;
 using System.Collections.Specialized;
+using Microsoft.Agents.AI;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSdkRootContinuationTests
 {
+    [Fact]
+    public async Task NativeAdmission_CanceledClosedOwnerRetainsAcceptedReservationWithoutSendingAgain()
+    {
+        var native = new FakeCopilotSession();
+        native.EnqueueEvent(new AssistantMessageDeltaEvent
+        {
+            Data = new() { MessageId = "accepted-reservation", DeltaContent = "accepted before cancellation" },
+        });
+        native.EnqueueEvent(new SessionIdleEvent { Data = new() { Aborted = false } });
+        await using var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        sdk.SetSubAgentDependencies(new SubAgentTestFakes.FakeRunningAgentChatFactory(),
+            new SubAgentTestFakes.FakeSubAgentTable());
+        using var reservation = await sdk.AdmitRootRequestAsync(null,
+            [new ChatMessage(ChatRole.User, "original request")], null, () => true, CancellationToken.None);
+        var canceled = new CancellationToken(canceled: true);
+        var retained = await sdk.AdmitRootRequestAsync(reservation,
+            [new ChatMessage(ChatRole.User, "must not send")], null, () => false, canceled);
+        Assert.True(canceled.IsCancellationRequested);
+        Assert.Same(reservation, retained);
+        Assert.True(retained.IsContinuation);
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkRootBatch.OptionName] = retained,
+                [CopilotSdkChatClient.ConsumeContinuationOptionName] = true,
+            },
+        };
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in sdk.GetStreamingResponseAsync([], options))
+            updates.Add(update);
+        Assert.Equal(1, native.SendAsyncCallCount);
+        Assert.Single(updates.SelectMany(update => update.Contents).OfType<TextContent>(),
+            text => text.Text == "accepted before cancellation");
+    }
+
+    [Fact]
+    public async Task AgentChat_NativeAdmission_UsesPreparedContextBeforeRequestAppend()
+    {
+        var native = new FakeCopilotSession { SessionId = Guid.NewGuid().ToString() };
+        var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var provider = new AdmissionContextProvider();
+        var appends = 0;
+        var store = new SerializedStore
+        {
+            BeforeWriteAsync = request =>
+            {
+                if (request.NewMessages?.Any(message => message.Text == "prepared request") != true)
+                    return Task.CompletedTask;
+                appends++;
+                Assert.Equal(1, native.SendAsyncCallCount);
+                native.Emit(new AssistantMessageDeltaEvent
+                {
+                    Data = new() { MessageId = "prepared-answer", DeltaContent = "prepared answer" },
+                });
+                native.Emit(new SessionIdleEvent { Data = new() { Aborted = false } });
+                return Task.CompletedTask;
+            },
+        };
+        await using var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(),
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"prepared","model":{"id":"echo","provider":"echo","apiType":"Echo"},
+                 "tools":[{"kind":"admission-context","description":"Prepared context"}]}
+                """),
+            ConfiguredStore = store, ClientOverride = sdk,
+            ForegroundScheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler,
+            AgentServices = new()
+            {
+                RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory(),
+                ToolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+                    "admission-context", (_, _) => Task.FromResult<AIContextProvider?>(provider)),
+            },
+        });
+        var input = chat.EnqueueUserMessageWithCompletion("prepared request");
+        await input.Settlement;
+        var config = Assert.Single(native.CreateSessionConfigs);
+        Assert.Contains(config.Tools ?? [], tool => tool.Name == "prepared_tool");
+        Assert.Equal("prepared native instructions", config.SystemMessage?.Content);
+        Assert.Equal(2, provider.Calls);
+        Assert.Equal(1, appends);
+        Assert.Equal(1, native.SendAsyncCallCount);
+        var messages = await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId });
+        Assert.Single(messages, message => message.Text == "prepared request");
+        Assert.Single(messages, message => message.Text == "prepared answer");
+        Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(),
+            text => text.Text == "prepared answer");
+    }
+
+    [Fact]
+    public async Task AgentChat_RequestPreparationFails_DoesNotAdmitOrAppendAndRetainsIndependentCleanup()
+    {
+        var original = new IOException("request history preparation failed");
+        var independent = new InvalidOperationException("independent preparation cleanup");
+        var provider = new AdmissionContextProvider();
+        var native = new FakeCopilotSession();
+        var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(new FakeCopilotClient(native)));
+        var store = new SerializedStore();
+        var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(),
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson("""
+                {"kind":"prompt","name":"prepared","model":{"id":"echo","provider":"echo","apiType":"Echo"},
+                 "tools":[{"kind":"admission-context","description":"Prepared context"}]}
+                """),
+            ConfiguredStore = store, ClientOverride = sdk,
+            ForegroundScheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler,
+            AgentServices = new()
+            {
+                RunningAgentChatFactory = new SubAgentTestFakes.FakeRunningAgentChatFactory(),
+                ToolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+                    "admission-context", (_, _) => Task.FromResult<AIContextProvider?>(provider)),
+            },
+        });
+        store.ReadFailure = original;
+        chat.RegisterOwnedResource(new FailingResource(independent));
+        try
+        {
+            var input = chat.EnqueueUserMessageWithCompletion("unadmitted request");
+            Assert.Same(original, await Assert.ThrowsAsync<IOException>(() => input.Settlement));
+            Assert.Equal(0, native.SendAsyncCallCount);
+            Assert.Empty(native.CreateSessionConfigs);
+            store.ReadFailure = null;
+            Assert.Empty(await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId }));
+            Assert.DoesNotContain(chat.History, item => item.Role == ChatRole.User);
+        }
+        finally
+        {
+            var failure = await Assert.ThrowsAsync<AggregateException>(() => chat.DisposeAsync().AsTask());
+            Assert.Equal<Exception>([original, independent], failure.Flatten().InnerExceptions);
+        }
+    }
+
+    private sealed class AdmissionContextProvider : AIContextProvider
+    {
+        public int Calls { get; private set; }
+        protected override ValueTask<AIContext> ProvideAIContextAsync(
+            InvokingContext context, CancellationToken cancellationToken = default)
+        {
+            this.Calls++;
+            return ValueTask.FromResult(new AIContext
+            {
+                Instructions = "prepared native instructions",
+                Tools = [AIFunctionFactory.Create(() => "prepared result", "prepared_tool")],
+            });
+        }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -1268,6 +1421,7 @@ public sealed class CopilotSdkRootContinuationTests
     {
         private readonly InMemoryAgentPersistenceStore inner = new();
         public Exception? RestoreFailure { get; set; }
+        public Exception? ReadFailure { get; set; }
         public Func<Task>? BeforeStoreAsync { get; init; }
         public Func<StoreRequestAgent, Task>? BeforeWriteAsync { get; init; }
         public Func<StoreRequestAgent, Task>? AfterWriteAsync { get; init; }
@@ -1289,8 +1443,11 @@ public sealed class CopilotSdkRootContinuationTests
         public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default) =>
             this.RestoreFailure is { } failure ? ValueTask.FromException<PersistedAgent?>(failure)
                 : this.inner.RestoreAsync(request, cancellationToken);
-        public async ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default) =>
-            (await this.inner.ReadMessagesAsync(request, cancellationToken)).Select(Clone).ToArray();
+        public async ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
+        {
+            if (this.ReadFailure is { } failure) throw failure;
+            return (await this.inner.ReadMessagesAsync(request, cancellationToken)).Select(Clone).ToArray();
+        }
         public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default) =>
             this.inner.AddSubAgentLinkAsync(parentSessionId, childSessionId, cancellationToken);
         public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default) =>

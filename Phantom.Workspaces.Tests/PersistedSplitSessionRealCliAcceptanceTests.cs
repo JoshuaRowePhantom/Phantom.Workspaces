@@ -63,6 +63,10 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
         await using var fixture = await PersistedSplitFixture.CreateAsync(
             server.BaseUrl,
             ct);
+        var stage = "attach";
+        var acknowledgments = new Dictionary<string, Task>();
+        Func<string> runtimeState = () => "not attached";
+        string? cancellationState = null;
         try
         {
             await using var sourceLease = await fixture.AttachFromSourceAsync(ct);
@@ -72,20 +76,34 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 registerAsRunningAgent: false,
                 ct);
             var ownerChat = Assert.IsType<AgentChat>(ownerLease.AgentChat);
+            runtimeState = () =>
+                $"source busy={sourceChat.IsBusy}, running={sourceChat.RunningItems.Count}, "
+                + $"history={sourceChat.History.Count}, revision={sourceChat.InputQueues.Snapshot.Revision}; "
+                + $"owner busy={ownerChat.IsBusy}, running={ownerChat.RunningItems.Count}, "
+                + $"history={ownerChat.History.Count}, revision={((IAgentChat)ownerChat).InputQueues.Snapshot.Revision}";
+            using var cancellationObservation = ct.Register(() => cancellationState = runtimeState());
 
             var firstProjected = WaitForAssistantAsync(
                 sourceChat,
                 "daemon-shade-first-result");
             var firstStreaming = WaitForRunningItemsAsync(sourceChat, nonEmpty: true);
             var firstPersisted = WaitForPersistedAsync(ownerChat);
+            stage = "first enqueue";
             var firstResult = await EnqueueAtSourceAsync(
                 sourceChat,
                 "opening-query-visible",
                 ct);
+            stage = "first streaming";
             await firstStreaming.WaitAsync(ct);
             var sourceFirstIdle = WaitForRunningItemsAsync(sourceChat, nonEmpty: false);
             var sourceFirstNotBusy = WaitForBusyAsync(sourceChat, busy: false);
             var ownerFirstIdle = WaitForRunningItemsAsync(ownerChat, nonEmpty: false);
+            acknowledgments["first projection"] = firstProjected;
+            acknowledgments["source first idle"] = sourceFirstIdle;
+            acknowledgments["source first not busy"] = sourceFirstNotBusy;
+            acknowledgments["owner first idle"] = ownerFirstIdle;
+            acknowledgments["first persisted"] = firstPersisted;
+            stage = "first completion";
             await Task.WhenAll(
                 firstProjected,
                 sourceFirstIdle,
@@ -116,6 +134,7 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             // The owner advances its queue revision while consuming the first turn.
             // Wait for that snapshot to reach the remote client before submitting a
             // second compare-and-swap queue command.
+            stage = "first queue revision";
             await WaitForQueueRevisionAsync(sourceChat, ownerChat, ct);
 
             var secondProjected = WaitForAssistantAsync(
@@ -129,24 +148,36 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
             var reconnect = fixture.SourceTransport.BlockNextConnection();
             var disconnected = WaitForConnectionAsync(sourceChat, connected: false);
             var reconnected = WaitForConnectionAsync(sourceChat, connected: true);
+            stage = "second enqueue";
             var secondResult = await EnqueueAtSourceAsync(
                 sourceChat,
                 "opening-query-after-reconnect",
                 ct);
+            stage = "second request 3";
             await conversation.GetRequestAsync(3).WaitAsync(ct);
+            stage = "second streaming";
             await secondStreaming.WaitAsync(ct);
             var sourceSecondIdle = WaitForRunningItemsAsync(sourceChat, nonEmpty: false);
             var sourceSecondNotBusy = WaitForBusyAsync(sourceChat, busy: false);
+            stage = "disconnect";
             await fixture.SourceTransport.DropCurrentChannelAsync();
             await disconnected.WaitAsync(ct);
             await reconnect.Started.WaitAsync(ct);
             restoredResponseGate.MarkReady();
+            acknowledgments["second owner projection"] = ownerSecond;
+            acknowledgments["second persisted"] = secondPersisted;
+            stage = "second owner completion";
             await Task.WhenAll(ownerSecond, secondPersisted).WaitAsync(ct);
             Assert.DoesNotContain(
                 sourceChat.History,
                 item => ContainsText(item, "daemon-shade-restored-result"));
 
             reconnect.Release();
+            acknowledgments["reconnected"] = reconnected;
+            acknowledgments["second source projection"] = secondProjected;
+            acknowledgments["source second idle"] = sourceSecondIdle;
+            acknowledgments["source second not busy"] = sourceSecondNotBusy;
+            stage = "reconnect completion";
             await Task.WhenAll(
                 reconnected,
                 secondProjected,
@@ -200,7 +231,9 @@ public sealed class PersistedSplitSessionRealCliAcceptanceTests
                 + $"server failures={server.Failures.Count}, "
                 + $"source routes={fixture.SourceRouting.Descriptors.Count}, "
                 + $"daemon routes={fixture.DaemonRouting.Descriptors.Count}, "
-                + $"shade accepted={fixture.ShadeRequest.IsCompleted}.");
+                + $"shade accepted={fixture.ShadeRequest.IsCompleted}; "
+                + $"stage={stage}; before lease disposal={cancellationState ?? runtimeState()}; "
+                + $"acknowledgments={string.Join(", ", acknowledgments.Select(pair => $"{pair.Key}:{pair.Value.Status}"))}.");
             throw;
         }
     }

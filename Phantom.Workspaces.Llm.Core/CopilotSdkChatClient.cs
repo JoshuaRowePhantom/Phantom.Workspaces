@@ -161,7 +161,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         Func<bool> admissionOpen,
         CancellationToken cancellationToken)
     {
-        await this.turnLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await this.turnLock.WaitAsync(reservation?.HasAcceptedOutput == true
+            ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
         try
         {
             if (this.rootEventQueue is { } previous

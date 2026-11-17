@@ -29,6 +29,7 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
     internal event Action<ChatMessage>? MessagePersisted;
     internal event Action<ChatResponseUpdate>? AcceptedUpdateRecovered;
     internal Func<Task>? AcceptedProjectionBoundary { get; set; }
+    internal Func<ChatOptions?, CancellationToken, Task<CopilotSdkRootBatch?>>? RootRequestAdmission { get; set; }
     internal StreamingAggregationWork? AggregationWork { get; private set; }
 
     public StreamingPersistenceMiddleware(
@@ -67,6 +68,23 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             cancellationToken = owningCancellation;
         var admittedBatch = options?.AdditionalProperties?.GetValueOrDefault(CopilotSdkRootBatch.OptionName) as CopilotSdkRootBatch;
         if (admittedBatch?.HasAcceptedOutput != true) cancellationToken.ThrowIfCancellationRequested();
+        if (this.RootRequestAdmission is { } admitRequest)
+        {
+            // Framework context providers have now supplied the actual invocation configuration.
+            // Admit before the deferred request append, but never start a differently configured
+            // native request before those providers run.
+            admittedBatch = await admitRequest(options, cancellationToken).ConfigureAwait(false);
+            options = options?.Clone() ?? new();
+            options.AdditionalProperties ??= [];
+            options.AdditionalProperties[CopilotSdkRootBatch.OptionName] = admittedBatch;
+            options.AdditionalProperties[CopilotSdkChatClient.ConsumeContinuationOptionName] =
+                admittedBatch?.IsContinuation == true;
+        }
+        if (this.provider.DeferRequestPersistence)
+            await this.provider.PersistDeferredRequestAsync(
+                this.currentSession ?? throw new InvalidOperationException("Native admission has no framework session."),
+                admittedBatch is { IsContinuation: false, RequestSend: not null },
+                cancellationToken).ConfigureAwait(false);
         // Keep pure aggregation and store I/O off the foreground, with one pull's back-pressure.
         // The cursor visits each newly stable message once; only authoritative identity
         // corrections materialize a previously persisted message again.

@@ -4,6 +4,8 @@ using Avalonia.Headless.XUnit;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
+using GitHub.Copilot;
+using Phantom.Workspaces.Llm.Copilot;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -15,15 +17,10 @@ public sealed class AgentDocumentLinkResolverTests
         await using var main = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await main.InitializeAsync();
         var store = new InMemoryAgentPersistenceStore();
-        var responses = new DeterministicTestChatClient();
-        var stream = responses.EnqueueStreamingResponse();
-        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "[report](report.md)"));
-        stream.Complete();
-        using var sdk = new CopilotSdkChatClient("test", "test", null, null);
+        await using var sdk = CreateDocumentRuntimeClient(out var nativeSession);
         sdk.SetWorkingDirectory(@"C:\generation\original");
-        using var client = new DocumentRuntimeClient(responses, sdk);
         await using var factory = new AgentChatFactory(store,
-            new AgentServices { ChatClientOverride = client }, TaskScheduler.FromCurrentSynchronizationContext());
+            new AgentServices { ChatClientOverride = sdk }, TaskScheduler.FromCurrentSynchronizationContext());
         var definition = AgentDefinitionLoader.LoadAgentFromJson("""
             {"kind":"prompt","name":"origin","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}
             """);
@@ -39,14 +36,22 @@ public sealed class AgentDocumentLinkResolverTests
         Assert.True(original.DocumentOrigin?.IsLocalFileSystem);
         sdk.SetWorkingDirectory(@"C:\runtime\changed");
         await lease.DisposeAsync();
-        await using var reloaded = await factory.GetAsync(sessionId);
+        Assert.Equal(1, nativeSession.Sends);
+        Assert.Equal(1, nativeSession.Disposals);
+        Assert.False(nativeSession.HasSubscriber);
+        await using var reloadedSdk = CreateDocumentRuntimeClient(out var reloadedNativeSession);
+        reloadedSdk.SetWorkingDirectory(sdk.WorkingDirectoryOverride!);
+        await using var reloadedFactory = new AgentChatFactory(store,
+            new AgentServices { ChatClientOverride = reloadedSdk }, TaskScheduler.FromCurrentSynchronizationContext());
+        await using var reloaded = await reloadedFactory.GetAsync(sessionId);
+        Assert.NotSame(chat, reloaded.LocalAgentChat);
         var restored = Assert.Single(reloaded.AgentChat.History, item => item.Role == ChatRole.Assistant);
         Assert.Equal(original.DocumentOrigin, restored.DocumentOrigin);
         Assert.Equal(@"C:\runtime\changed", reloaded.LocalAgentChat.DocumentWorkingDirectory);
 
         var childSink = await reloaded.LocalAgentChat.GetOrCreateAsync("sdk-child", definition, "child-call");
         var child = Assert.IsType<AgentChat>(Assert.Single(reloaded.LocalAgentChat.SubAgents));
-        sdk.SetWorkingDirectory(@"C:\parent\later");
+        reloadedSdk.SetWorkingDirectory(@"C:\parent\later");
         var childCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ((System.Collections.Specialized.INotifyCollectionChanged)child.History).CollectionChanged += (_, _) =>
         {
@@ -86,14 +91,72 @@ public sealed class AgentDocumentLinkResolverTests
         await childView.OpenDocumentLinkAsync("child.md", childMessage.AssistantRunId, fromTranscript: true);
         Assert.Contains(main.WorkspacePanes.SelectMany(pane => pane.Tabs).OfType<WebViewModel>(),
             browser => browser.SourceUri?.AbsoluteUri == "file:///C:/runtime/changed/child.md");
+        Assert.Equal(0, reloadedNativeSession.Sends);
     }
 
-    private sealed class DocumentRuntimeClient(
-        IChatClient inner,
-        CopilotSdkChatClient runtime) : DelegatingChatClient(inner)
+    private static CopilotSdkChatClient CreateDocumentRuntimeClient(out DocumentNativeSession nativeSession)
     {
-        public override object? GetService(Type serviceType, object? serviceKey = null)
-            => serviceType == typeof(CopilotSdkChatClient) ? runtime : base.GetService(serviceType, serviceKey);
+        nativeSession = new DocumentNativeSession();
+        var sdk = new CopilotSdkChatClient("test", "test", null, null);
+        sdk.SetCopilotClientFactoryForTest(new DocumentNativeBackend(nativeSession));
+        return sdk;
+    }
+
+    private sealed class DocumentNativeBackend(DocumentNativeSession session) : ICopilotClientFactory, ICopilotClient
+    {
+        public ICopilotClient Create(CopilotClientOptions options) => this;
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<ModelInfo>>([]);
+        public Task<ICopilotSession> CreateSessionAsync(SessionConfig config, CancellationToken cancellationToken)
+            => Task.FromResult<ICopilotSession>(session);
+        public Task<ICopilotSession> ResumeSessionAsync(string sessionId, ResumeSessionConfig config, CancellationToken cancellationToken)
+            => Task.FromResult<ICopilotSession>(session);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DocumentNativeSession : ICopilotSession, IDisposable
+    {
+        private Action<SessionEvent>? receive;
+        public string SessionId => "document-origin-session";
+        public int Sends { get; private set; }
+        public int Disposals { get; private set; }
+        public bool HasSubscriber => this.receive is not null;
+        public IDisposable Subscribe(Action<SessionEvent> handler)
+        {
+            Assert.Null(this.receive);
+            this.receive = handler;
+            return this;
+        }
+        public Task SendAsync(MessageOptions options, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            this.Sends++;
+            var handler = Assert.IsType<Action<SessionEvent>>(this.receive);
+            handler(new AssistantMessageDeltaEvent
+            {
+                Data = new() { MessageId = "document-response", DeltaContent = "[report](report.md)" },
+            });
+            handler(new SessionIdleEvent { Data = new() { Aborted = false } });
+            return Task.CompletedTask;
+        }
+        public async Task<AssistantMessageEvent?> SendAndWaitAsync(MessageOptions options, TimeSpan? timeout, CancellationToken cancellationToken)
+        {
+            await this.SendAsync(options, cancellationToken);
+            return null;
+        }
+#pragma warning disable GHCP001
+        public Task<IReadOnlyList<GitHub.Copilot.Rpc.TaskInfo>> ListTasksAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<GitHub.Copilot.Rpc.TaskInfo>>([]);
+#pragma warning restore GHCP001
+        public Task AbortAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task SetModelAsync(string modelId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public void Dispose() => this.receive = null;
+        public ValueTask DisposeAsync()
+        {
+            this.Disposals++;
+            return ValueTask.CompletedTask;
+        }
     }
 
     [AvaloniaTheory]

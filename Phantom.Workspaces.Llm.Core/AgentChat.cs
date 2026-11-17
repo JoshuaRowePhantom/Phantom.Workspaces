@@ -532,7 +532,10 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
            this.RegisterOwnedResource(asyncDisposableClient);
        }
 
-       this.persistenceProvider = new IncrementalPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore);
+       this.persistenceProvider = new IncrementalPersistenceChatHistoryProvider(resolvedAgentDefinition, this.request.ConfiguredStore)
+       {
+           DeferRequestPersistence = this.copilotSdkClient is not null,
+       };
        this.chatHistoryProvider = new AgentFrameworkChatHistoryProvider(this.persistenceProvider);
        var streamingMiddleware = new StreamingPersistenceMiddleware(resolvedClient, this.persistenceProvider, this.request.ConfiguredStore);
        this.chatHistoryProvider.InvocationStarting += (_, args) => streamingMiddleware.SetCurrentSession(args.Session);
@@ -2738,20 +2741,28 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                             AssistantRunId = assistantRunId,
                         }]);
 
-                    if (this.copilotSdkClient is not null && chatMessagesToSubmit.Count > 0)
+                    if (acceptedOutputOwner is not null)
                     {
-                        admittedBatch = await this.copilotSdkClient.AdmitRootRequestAsync(
-                            admittedBatch, chatMessagesToSubmit, this.chatOptions?.ChatOptions,
-                            () => Volatile.Read(ref this.disposeStarted) == 0, runCancellation.Token);
-                        if (admittedBatch.IsContinuation)
+                        acceptedOutputOwner.RootRequestAdmission = async (preparedOptions, owningToken) =>
                         {
-                            deferredMessages = [..chatMessagesToSubmit];
-                            deferredCompletions = [..turnCompletions];
-                            chatMessagesToSubmit.Clear();
-                            turnCompletions.Clear();
-                            consumeRootContinuation = true;
-                        }
-                        else this.AppendUserMessagesToHistory(chatMessagesToSubmit);
+                            await this.RunOnForegroundAsync(async () =>
+                            {
+                                if (chatMessagesToSubmit.Count == 0) return;
+                                admittedBatch = await this.copilotSdkClient!.AdmitRootRequestAsync(
+                                    admittedBatch, chatMessagesToSubmit, preparedOptions,
+                                    () => Volatile.Read(ref this.disposeStarted) == 0, owningToken);
+                                if (admittedBatch.IsContinuation)
+                                {
+                                    deferredMessages = [..chatMessagesToSubmit];
+                                    deferredCompletions = [..turnCompletions];
+                                    chatMessagesToSubmit.Clear();
+                                    turnCompletions.Clear();
+                                    consumeRootContinuation = true;
+                                }
+                                else this.AppendUserMessagesToHistory(chatMessagesToSubmit);
+                            }, runAfterCancellation: true).ConfigureAwait(false);
+                            return admittedBatch;
+                        };
                     }
 
                     partialResponses = new PartialResponseConflator(
@@ -2950,6 +2961,8 @@ public sealed class AgentChat : IAgentChat, IAgentDocumentContext, IAgentChatRun
                                 acceptedOutputOwner.AcceptedUpdateRecovered -= recoverAcceptedUpdate;
                                 if (ReferenceEquals(acceptedOutputOwner.AcceptedProjectionBoundary, projectAcceptedOutput))
                                     acceptedOutputOwner.AcceptedProjectionBoundary = null;
+                                acceptedOutputOwner.RootRequestAdmission = null;
+                                this.persistenceProvider?.DiscardDeferredRequest();
                             }
                         }
 

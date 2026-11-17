@@ -19,6 +19,23 @@ internal sealed class IncrementalPersistenceChatHistoryProvider : ChatHistoryPro
     private volatile string? copilotSdkSessionId;
     private volatile BsonDocument? cachedAgentSessionJson;
     private Func<AgentSession, CancellationToken, ValueTask<BsonDocument>>? serializeSession;
+    private ChatMessage[]? deferredRequestMessages;
+    internal bool DeferRequestPersistence { get; set; }
+
+    internal void DiscardDeferredRequest()
+        => Interlocked.Exchange(ref this.deferredRequestMessages, null);
+
+    internal async ValueTask PersistDeferredRequestAsync(
+        AgentSession session, bool admittedRequest, CancellationToken cancellationToken)
+    {
+        var messages = Interlocked.Exchange(ref this.deferredRequestMessages, null);
+        if (admittedRequest && messages is { Length: > 0 })
+            await this.store.StoreAsync(new StoreRequestAgent
+            {
+                Agent = this.BuildPersistedAgent(session),
+                NewMessages = messages,
+            }, cancellationToken).ConfigureAwait(false);
+    }
 
     public IncrementalPersistenceChatHistoryProvider(
         AgentDefinition? agentDefinition,
@@ -144,7 +161,11 @@ internal sealed class IncrementalPersistenceChatHistoryProvider : ChatHistoryPro
         this.cachedAgentSessionJson = sessionJson;
 
         var requestMessages = context.RequestMessages.ToArray();
-        if (requestMessages.Length > 0)
+        if (this.DeferRequestPersistence)
+        {
+            this.deferredRequestMessages = requestMessages;
+        }
+        else if (requestMessages.Length > 0)
         {
             await this.store.StoreAsync(
                 new StoreRequestAgent
