@@ -132,6 +132,18 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         foreach (var entry in retired) await entry.RetireAsync().ConfigureAwait(false);
     }
 
+    internal async Task RetireCanonicalChildrenAsync(Func<AgentChat, bool> complete)
+    {
+        if (!this.canonicalLifecycle) return;
+        ChildRoutingEntry[] entries;
+        lock (this.childSinks) entries = this.childSinks.Values.ToArray();
+        lock (this.pendingChildSinksByToolCall)
+            entries = entries.Concat(this.pendingChildSinksByToolCall.Values).Distinct().ToArray();
+        foreach (var entry in entries)
+            if (entry.Chat is { } chat && complete(chat))
+                await this.RetireChildAsync(chat).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Fix #1193: force every still-running child sub-agent to a terminal (failed) state.
     /// Called by the parent's cancellation/interrupt path (see
@@ -580,8 +592,8 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
 
         if (this.canonicalLifecycle)
         {
-            // The lifetime observer already applied this epoch and ended its receiver.
-            // A delayed turn subscription must not signal or project into a resumed epoch.
+            // The canonical guard ended this epoch after its earlier routed output.
+            // Retiring must not signal or project into a subsequently resumed epoch.
             await entry.RetireAsync().ConfigureAwait(false);
         }
         else if (cancelled)
@@ -726,7 +738,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         });
     }
 
-    private static (bool Failed, bool Cancelled, string? Error) ParseLifecycleResult(FunctionResultContent result)
+    internal static (bool Failed, bool Cancelled, string? Error) ParseLifecycleResult(FunctionResultContent result)
     {
         if (result.Result is string json)
         {

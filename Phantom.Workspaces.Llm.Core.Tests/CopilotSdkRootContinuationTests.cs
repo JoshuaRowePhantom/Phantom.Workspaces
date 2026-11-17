@@ -11,6 +11,120 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public sealed class CopilotSdkRootContinuationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HostMetadataStalls_TwoChildTerminalsAndParentPersistBeforeOwnedCleanup(
+        bool independentDisposalFailure)
+    {
+        var sent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var native = new FakeCopilotSession { Sending = _ => sent.TrySetResult() };
+        var nativeClient = new FakeCopilotClient(native);
+        var sdk = new CopilotSdkChatClient("gpt-5", "Copilot", null, null);
+        sdk.SetCopilotClientFactoryForTest(new FakeCopilotClientFactory(nativeClient));
+        var scheduler = new ConcurrentExclusiveSchedulerPair().ExclusiveScheduler;
+        var firstChildStored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondChildStored = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new SerializedStore
+        {
+            AfterWriteAsync = request =>
+            {
+                foreach (var message in request.NewMessages ?? [])
+                {
+                    if (message.Text == "child final 1") firstChildStored.TrySetResult();
+                    if (message.Text == "child final 2") secondChildStored.TrySetResult();
+                }
+                return Task.CompletedTask;
+            },
+        };
+        await using var children = new AgentChatFactory(store, new(), scheduler);
+        var chat = await AgentChat.CreateAsync(new()
+        {
+            AgentSessionId = Guid.NewGuid().ToString(),
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(Definition),
+            ConfiguredStore = store, ClientOverride = sdk, ForegroundScheduler = scheduler,
+            AgentServices = new() { RunningAgentChatFactory = children },
+        });
+        var original = new IOException("independent native disposal failure");
+        Task? disposal = null;
+        try
+        {
+            var input = chat.EnqueueUserMessageWithCompletion("two child request");
+            await sent.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            nativeClient.LiveSessionStatesHandler = async token =>
+            {
+                using var registration = token.Register(() => cancelled.TrySetResult());
+                entered.TrySetResult();
+                await release.Task;
+                return [];
+            };
+            native.Emit(new SessionBackgroundTasksChangedEvent { Id = Guid.NewGuid(), Data = new() });
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            foreach (var number in new[] { 1, 2 })
+            {
+                var agentId = $"child-{number}";
+                var invocation = $"task-{number}";
+                native.Emit(new SubagentStartedEvent
+                {
+                    Id = Guid.NewGuid(), AgentId = agentId,
+                    Data = new() { ToolCallId = invocation, AgentName = agentId,
+                        AgentDisplayName = agentId, AgentDescription = "gated metadata child" },
+                });
+                native.Emit(new AssistantMessageEvent
+                {
+                    Id = Guid.NewGuid(), AgentId = agentId,
+                    Data = new() { MessageId = $"answer-{number}", Content = $"child final {number}" },
+                });
+                native.Emit(new SubagentCompletedEvent
+                {
+                    Id = Guid.NewGuid(), AgentId = agentId,
+                    Data = new() { ToolCallId = invocation, AgentName = agentId, AgentDisplayName = agentId },
+                });
+            }
+            native.Emit(new AssistantMessageEvent
+            {
+                Id = Guid.NewGuid(), Data = new() { MessageId = "parent-answer", Content = "parent final" },
+            });
+            native.Emit(new SessionIdleEvent { Id = Guid.NewGuid(), Data = new() });
+
+            await input.Settlement.WaitAsync(TimeSpan.FromSeconds(15));
+            await chat.WaitForProviderCleanupAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            await Task.WhenAll(firstChildStored.Task, secondChildStored.Task).WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(release.Task.IsCompleted);
+            Assert.Single(await store.ReadMessagesAsync(new() { AgentSessionId = chat.AgentSessionId }),
+                message => message.Text == "parent final");
+            Assert.Single(chat.History.SelectMany(item => item.Contents).OfType<TextContent>(),
+                text => text.Text == "parent final");
+            var childIds = await store.ReadSubAgentChildIdsAsync(chat.AgentSessionId);
+            Assert.Equal(2, childIds.Count);
+            var childMessages = new List<ChatMessage>();
+            foreach (var childId in childIds)
+                childMessages.AddRange(await store.ReadMessagesAsync(new() { AgentSessionId = childId.Value }));
+            Assert.Single(childMessages, message => message.Text == "child final 1");
+            Assert.Single(childMessages, message => message.Text == "child final 2");
+            Assert.Equal(1, native.SendAsyncCallCount);
+
+            if (independentDisposalFailure) nativeClient.DisposeFailure = original;
+            disposal = chat.DisposeAsync().AsTask();
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(disposal.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            var failure = await Record.ExceptionAsync(() => disposal ?? chat.DisposeAsync().AsTask());
+            if (independentDisposalFailure && disposal is not null)
+                Assert.Same(original, failure);
+            else
+                Assert.Null(failure);
+            Assert.Equal(1, nativeClient.DisposeAsyncCallCount);
+            Assert.Equal(0, native.SubscriberCount);
+        }
+    }
+
     [Fact]
     public async Task NativeAdmission_CanceledClosedOwnerRetainsAcceptedReservationWithoutSendingAgain()
     {

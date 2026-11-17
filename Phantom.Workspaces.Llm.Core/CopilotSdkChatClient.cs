@@ -118,6 +118,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private long liveSessionGeneration;
     internal event Action<IReadOnlyList<AgentRegistryLiveTargetEntry>>? LiveSessionSnapshotApplied;
     internal event Action<Guid>? StateEventProcessed;
+    internal event Action<Guid, string>? StateEventProcessing;
     private readonly CopilotSubAgentLifecycleStore subAgentStates = new();
     private readonly Dictionary<string, SubAgent> childrenByAgentId = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SubAgent> childrenByToolCallId = new(StringComparer.Ordinal);
@@ -1122,7 +1123,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
     }
 
-    private void ProjectSubAgent(SubAgent child, string terminalState, Exception? terminalError = null)
+    private void ProjectSubAgent(SubAgent child, string terminalState, Exception? terminalError = null,
+        bool ownsRoutedOutput = false)
     {
         var state = this.subAgentStates.Project(child.SessionId.Value);
         var request = new ApplySubAgentStateRequest(child.SessionId.Value,
@@ -1131,6 +1133,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             chat.ApplySubAgentLifecycleState(request);
             if (state != "running"
+                && (ownsRoutedOutput || this.currentRouter is null)
                 && chat.GetService(typeof(ICopilotSubAgentReceiver)) is ICopilotSubAgentReceiver receiver)
             {
                 if (state == "cancelled") receiver.Fail(new OperationCanceledException("Sub-agent execution was cancelled."));
@@ -1276,6 +1279,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
         var channel = Channel.CreateUnbounded<SessionEvent>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+        var liveRefreshRequests = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.DropWrite,
+        });
         var shutdown = new CancellationTokenSource();
         long taskBoundary = 0;
         var reconciler = new CopilotSdkSubAgentStateReconciler(async ct =>
@@ -1340,10 +1349,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     lock (this.subAgentStateGate)
                         if (this.lastObservedSdkTimestamp is null || e.Timestamp > this.lastObservedSdkTimestamp)
                             this.lastObservedSdkTimestamp = e.Timestamp;
-                    // Even ephemeral invalidations participate in the predecessor chain.
+                    // Ephemeral invalidations apply without advancing the durable predecessor.
                     bool unrepairedGap;
                     try
                     {
+                        this.StateEventProcessing?.Invoke(e.Id, "predecessor-reconcile");
                         unrepairedGap = await reconciler.ObserveEventAsync(e,
                             ct => this.ReadPersistedSubAgentEventsAsync(session.SessionId, ct),
                             this.ObserveSubAgentLifecycle).ConfigureAwait(false);
@@ -1358,12 +1368,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         || CopilotSdkEventContract.Classify(e.Type).Category == "unsupported"
                         || e is SystemNotificationEvent { Data.Kind: SystemNotificationAgentIdle or SystemNotificationAgentCompleted })
                     {
+                        this.StateEventProcessing?.Invoke(e.Id, "task-snapshot");
                         try { await reconciler.InvalidateAsync().ConfigureAwait(false); }
                         catch (NotSupportedException) { }
-                        try { await this.RefreshLiveSessionStatesAsync(shutdown.Token).ConfigureAwait(false); }
-                        catch (NotSupportedException) { }
+                        // Host metadata must not block ordered child-terminal/persistence acknowledgments.
+                        liveRefreshRequests.Writer.TryWrite(true);
                     }
                     this.LogLifecycleDecision(e, unrepairedGap ? "gap-reconciled" : "predecessor-accepted");
+                    this.StateEventProcessing?.Invoke(e.Id, "child-dispatch");
                     await this.DispatchLiveChildUpdateAsync(e, shutdown.Token).ConfigureAwait(false);
                     if (e is SubagentCompletedEvent or SubagentFailedEvent && e.Id != Guid.Empty)
                     {
@@ -1388,17 +1400,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         });
         this.liveSessionPoller = Task.Run(async () =>
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1), this.StateObservationTimeProvider);
+            using var timer = this.StateObservationTimeProvider.CreateTimer(_ =>
+            {
+                bool hasChildren;
+                lock (this.subAgentStateGate) hasChildren = this.childrenByAgentId.Count > 0;
+                if (hasChildren) liveRefreshRequests.Writer.TryWrite(true);
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
             try
             {
-                while (await timer.WaitForNextTickAsync(shutdown.Token).ConfigureAwait(false))
+                await foreach (var _ in liveRefreshRequests.Reader.ReadAllAsync(shutdown.Token).ConfigureAwait(false))
                 {
-                    bool hasChildren;
-                    lock (this.subAgentStateGate) hasChildren = this.childrenByAgentId.Count > 0;
-                    if (hasChildren) await this.RefreshLiveSessionStatesAsync(shutdown.Token).ConfigureAwait(false);
+                    try { await this.RefreshLiveSessionStatesAsync(shutdown.Token).ConfigureAwait(false); }
+                    catch (NotSupportedException) { }
                 }
             }
-            catch (NotSupportedException) { }
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
             catch (Exception ex)
             {
@@ -1423,13 +1438,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private async Task DispatchLiveChildUpdateAsync(SessionEvent e, CancellationToken cancellationToken)
     {
+        if (this.currentRouter is not null) return;
         if (e is SystemNotificationEvent { Data.Kind: SystemNotificationAgentIdle or SystemNotificationAgentCompleted } notification)
         {
             this.FinishNotifiedChild(notification);
             return;
         }
         if (string.IsNullOrEmpty(e.AgentId) && e is not (SubagentCompletedEvent or SubagentFailedEvent)) return;
-        if (this.currentRouter is not null && e is not (SubagentCompletedEvent or SubagentFailedEvent)) return;
         SubAgent? child;
         lock (this.subAgentStateGate)
             child = this.childrenByAgentId.GetValueOrDefault(e.AgentId ?? "")
@@ -1928,10 +1943,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                             JsonElement { ValueKind: JsonValueKind.String } json when json.TryGetDateTimeOffset(out var parsed) => parsed,
                             _ => null,
                         };
-                        return (eventId == Guid.Empty || this.acceptedTerminalGenerations.TryGetValue(eventId, out var accepted)
+                        var canFinish = (eventId == Guid.Empty || this.acceptedTerminalGenerations.TryGetValue(eventId, out var accepted)
                             && accepted is not null && accepted == this.subAgentStates.InvocationGeneration(invocation))
                             && !this.subAgentStates.IsActive(child.SessionId.Value)
                             && this.subAgentStates.CanFinishInvocation(child.SessionId.Value, invocation, timestamp);
+                        if (canFinish)
+                        {
+                            var (failed, _, error) = CopilotSubAgentRouter.ParseLifecycleResult(result);
+                            this.ProjectSubAgent(child, "completed",
+                                failed ? new AgentSubagentFailedException(error) : null, ownsRoutedOutput: true);
+                        }
+                        return canFinish;
                     }
                 }, canonicalLifecycle: true);
             this.currentRouter = router;
@@ -1970,6 +1992,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         await router.RouteAsync(update).ConfigureAwait(false);
                     }
 
+                    await router.RetireCanonicalChildrenAsync(chat =>
+                    {
+                        lock (this.subAgentStateGate)
+                        {
+                            var child = this.childrenByAgentId.Values.Concat(this.childrenByToolCallId.Values)
+                                .FirstOrDefault(candidate => ReferenceEquals(candidate.AgentChat, chat));
+                            if (child is null || this.subAgentStates.IsActive(child.SessionId.Value)) return false;
+                            this.ProjectSubAgent(child, "completed", ownsRoutedOutput: true);
+                            return true;
+                        }
+                    }).ConfigureAwait(false);
                     rootEvents.CompleteDispatch(error => channel.Writer.TryComplete(error));
                 }
                 catch (OperationCanceledException) when (outputDrain is null && turnCancellationToken.IsCancellationRequested)

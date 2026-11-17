@@ -41,11 +41,16 @@ namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
 /// </summary>
 [Collection(WebViewTestCollection.Name)]
 [Trait("Category", "WebView")]
-public sealed class ChatOutputByokEndToEndWebViewTests
+public sealed partial class ChatOutputByokEndToEndWebViewTests
 {
     private readonly WebViewAppFixture fixture;
+    private readonly ITestOutputHelper output;
 
-    public ChatOutputByokEndToEndWebViewTests(WebViewAppFixture fixture) => this.fixture = fixture;
+    public ChatOutputByokEndToEndWebViewTests(WebViewAppFixture fixture, ITestOutputHelper output)
+    {
+        this.fixture = fixture;
+        this.output = output;
+    }
 
     [Fact]
     public Task AgentChatOutput_ByokTwoSubagents_HelloWorlds_VisibleInParentAndSubagentDoms()
@@ -53,6 +58,8 @@ public sealed class ChatOutputByokEndToEndWebViewTests
         {
             var timeout = TimeSpan.FromSeconds(90);
             await using var server = new ScriptedByokChatServer();
+            using var acknowledgments = new NativeAcknowledgments();
+            server.Trace = acknowledgments.ObserveServer;
 
             // ---- Scripted wire exchange (captured-exchange derived) -------------------------
             // All copilot-level knowledge (tool names, agent-id conventions, prompt markers)
@@ -192,6 +199,8 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             try
             {
                 var chat = lease.LocalAgentChat;
+                acknowledgments.ObserveNativeSession(chat);
+                acknowledgments.ObserveChat("parent", chat);
                 await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory, TaskScheduler.Default);
 
                 var parentControl = new AgentChatOutputControl { DataContext = viewModel };
@@ -205,6 +214,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     parentWindow.Show();
                     await parentReady.WaitAsync(timeout);
                     await parentControl.HistoryLoaded.WaitAsync(timeout);
+                    await acknowledgments.ObserveDomAsync("parent", parentBrowser);
 
                     // ---- Drive the scenario --------------------------------------------------
                     chat.EnqueueUserMessage("Print \"hello world 1\" and \"hello world 2\" using two subagents.");
@@ -273,6 +283,9 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                         await subReady.WaitAsync(timeout);
                         await subControl.HistoryLoaded.WaitAsync(timeout);
                         subControls.Add((slot.AgentId, subViewModel.LocalAgentChat, subBrowser));
+                        var label = $"child-{subControls.Count}";
+                        acknowledgments.ObserveChat(label, subViewModel.LocalAgentChat);
+                        await acknowledgments.ObserveDomAsync(label, subBrowser);
                     }
 
                     // Release both sub-agent final replies in a single burst to stress the
@@ -280,9 +293,11 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     // finished both read_agent waits and asked for the next main turn.
                     subOneFinalTurn.MarkReady();
                     subTwoFinalTurn.MarkReady();
+                    acknowledgments.Record("released-child-finals", new { });
 
                     await main.GetRequestAsync(2).WaitAsync(timeout);
                     mainFinalTurn.MarkReady();
+                    acknowledgments.Record("released-parent-final", new { });
 
                     // Model-layer completion: the final texts are promoted into each chat's
                     // history. The DOM assertions below then check the rendering layer only. Which
@@ -302,16 +317,15 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                                 : ("SUB-TWO-FINAL", "hello world 2", subBrowser));
                         }
                     }
-                    catch (TimeoutException)
+                    catch (TimeoutException exception)
                     {
-                        var subDiag = string.Join(
-                            "\n",
-                            subControls.Select(s =>
-                                $"Sub '{s.AgentId}' history ({s.Chat.History.Count}): " +
-                                string.Join(" || ", s.Chat.History.Select(item =>
-                                    string.Join(" | ", item.Contents.Select(c => c.GetType().Name + ":" + (c as TextContent)?.Text))))));
+                        var capture = await acknowledgments.SnapshotAsync(
+                            server, store,
+                            new[] { ("parent", chat) }.Concat(subControls.Select(
+                                (child, index) => ($"child-{index + 1}", child.Chat))),
+                            [("main-final", mainFinalTurn), ("sub-one-final", subOneFinalTurn), ("sub-two-final", subTwoFinalTurn)]);
                         throw new InvalidOperationException(
-                            $"Timed out waiting for final markers. Diagnostics:\n{Diagnostics(server, chat, loggerFactory)}\n{subDiag}");
+                            $"Timed out waiting for final markers. Pre-cleanup acknowledgments:\n{capture}", exception);
                     }
 
                     // Each sub-agent chat rendered exactly one of the two scripted replies.
@@ -338,6 +352,11 @@ public sealed class ChatOutputByokEndToEndWebViewTests
 
                     Assert.Empty(server.Failures);
                     AssertCredentialUse(credentials, server);
+                    this.output.WriteLine(await acknowledgments.SnapshotAsync(
+                        server, store,
+                        new[] { ("parent", chat) }.Concat(subControls.Select(
+                            (child, index) => ($"child-{index + 1}", child.Chat))),
+                        [("main-final", mainFinalTurn), ("sub-one-final", subOneFinalTurn), ("sub-two-final", subTwoFinalTurn)]));
                 }
                 finally
                 {

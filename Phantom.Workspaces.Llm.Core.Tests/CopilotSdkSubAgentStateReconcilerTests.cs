@@ -8,6 +8,40 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class CopilotSdkSubAgentStateReconcilerTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EphemeralSiblingsAndChildContext_DoNotAdvanceDurablePredecessor(bool childContext)
+    {
+        var first = new SessionBackgroundTasksChangedEvent { Id = Guid.NewGuid(), Data = new() };
+        var firstEphemeral = new SessionBackgroundTasksChangedEvent
+        {
+            Id = Guid.NewGuid(), ParentId = childContext ? Guid.NewGuid() : first.Id,
+            Ephemeral = true, Data = new(),
+        };
+        var secondEphemeral = new SessionBackgroundTasksChangedEvent
+        {
+            Id = Guid.NewGuid(), ParentId = first.Id, Ephemeral = true, Data = new(),
+        };
+        var nextDurable = new SessionBackgroundTasksChangedEvent
+        {
+            Id = Guid.NewGuid(), ParentId = first.Id, Data = new(),
+        };
+        var applied = new List<Guid>();
+        var replays = 0;
+        using var reconciler = new CopilotSdkSubAgentStateReconciler(
+            _ => Task.FromResult<IReadOnlyList<TaskInfo>>([]), _ => { });
+        Task<IReadOnlyList<SessionEvent>> Replay(CancellationToken _)
+        {
+            replays++;
+            return Task.FromResult<IReadOnlyList<SessionEvent>>([]);
+        }
+        foreach (var value in new SessionEvent[] { first, firstEphemeral, secondEphemeral, nextDurable, firstEphemeral })
+            Assert.False(await reconciler.ObserveEventAsync(value, Replay, e => applied.Add(e.Id)));
+        Assert.Equal(0, replays);
+        Assert.Equal([first.Id, firstEphemeral.Id, secondEphemeral.Id, nextDurable.Id], applied);
+    }
+
+    [Theory]
     [InlineData("completed")]
     [InlineData("failed")]
     [InlineData("cancelled")]

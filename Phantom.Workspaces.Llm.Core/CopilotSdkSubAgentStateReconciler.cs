@@ -33,6 +33,11 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
         {
             this.applyEvent = apply;
             if (live.Id != Guid.Empty && this.processedEventIds.Contains(live.Id)) return false;
+            if (live.Ephemeral is true)
+            {
+                this.AcceptEvent(live, apply);
+                return false;
+            }
             if (this.lastEventId is { } previous && live.ParentId is { } parent && parent != previous)
             {
                 var events = await replay(this.shutdown.Token).ConfigureAwait(false);
@@ -51,7 +56,8 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
     private void AcceptOrQueue(SessionEvent value, Action<SessionEvent> apply)
     {
         if (value.Id != Guid.Empty && this.processedEventIds.Contains(value.Id)) return;
-        if (this.lastEventId is { } previous && value.ParentId is { } parent && parent != previous)
+        if (value.Ephemeral is not true
+            && this.lastEventId is { } previous && value.ParentId is { } parent && parent != previous)
         {
             if (value.Id != Guid.Empty) this.pendingEvents[value.Id] = value;
             return;
@@ -87,7 +93,7 @@ internal sealed class CopilotSdkSubAgentStateReconciler(
     {
         if (value.Id != Guid.Empty && !this.processedEventIds.Add(value.Id)) return;
         apply(value);
-        if (value.Id != Guid.Empty) this.lastEventId = value.Id;
+        if (value.Id != Guid.Empty && value.Ephemeral is not true) this.lastEventId = value.Id;
     }
 
     internal Task InvalidateAsync()
