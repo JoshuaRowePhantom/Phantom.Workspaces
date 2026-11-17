@@ -12,10 +12,8 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 /// <summary>
 /// UI-layer adapter that wraps an <see cref="AgentChat"/> and builds its display model by
 /// observing the model directly. Subscribes to <see cref="AgentChat.RunningItems"/> and each
-/// running item's <see cref="AgentChatRunningItem.Items"/> collection. Because
-/// <see cref="AgentChat"/> dispatches all <see cref="AgentChat.RunningItems"/> mutations on the
-/// foreground scheduler, all notifications arrive on the UI thread — no additional marshalling
-/// is needed.
+/// running item's <see cref="AgentChatRunningItem.Items"/> collection. Initial subscriptions and
+/// snapshots use the engine's publication locks; the engine and viewer schedulers may differ.
 /// </summary>
 public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposable
 {
@@ -37,6 +35,9 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     private readonly NotifyCollectionChangedEventHandler onSubAgentsChanged;
     private readonly EventHandler? onAgentChatCompletionStateChanged;
     private readonly AgentChat? agentChat;
+    private readonly object resourcesLock = new();
+    private readonly NotifyCollectionChangedEventHandler onRunningItemChanged;
+    private bool disposed;
 
     public RunningSubAgentDisplay(AgentChat agentChat)
         : this(
@@ -117,24 +118,68 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
         this.onRunningItemsChanged = this.OnRunningItemsChanged;
         this.onSubAgentsChanged = this.OnSubAgentsChanged;
+        this.onRunningItemChanged = (sender, change) =>
+        {
+            lock (this.resourcesLock)
+            {
+                if (this.disposed) return;
+                var item = this.runningItemHandlers.Keys.FirstOrDefault(item => ReferenceEquals(item.Items, sender));
+                if (item is not null) this.OnRunningItemItemsChanged(item, change);
+            }
+        };
 
-        ((INotifyCollectionChanged)runningItems).CollectionChanged += this.onRunningItemsChanged;
-        subAgentsSource.CollectionChanged += this.onSubAgentsChanged;
-        
         if (agentChat is not null)
         {
             this.onAgentChatCompletionStateChanged = (sender, e) => this.CompletionStateChanged?.Invoke(this, e);
-            agentChat.CompletionStateChanged += this.onAgentChatCompletionStateChanged;
         }
 
-        foreach (var item in runningItems)
-            this.SubscribeToRunningItem(item);
-
-        if (subAgentsSource is IEnumerable<IRunningSubAgent> existingSubAgents)
+        try
         {
-            foreach (var subAgent in existingSubAgents)
-                this.subAgentDisplayItems.Add(this.childFactory(subAgent));
+            if (agentChat is not null)
+            {
+                agentChat.CompletionStateChanged += this.onAgentChatCompletionStateChanged;
+                ((IAgentChatRunningItemsSnapshotProvider)agentChat).SubscribeAndCaptureRunningItems(
+                    this.onRunningItemsChanged,
+                    this.onRunningItemChanged,
+                    snapshots =>
+                    {
+                        lock (this.resourcesLock)
+                            foreach (var snapshot in snapshots)
+                                this.runningItemHandlers.Add(snapshot.Item, this.onRunningItemChanged);
+                    });
+            }
+            else
+            {
+                ((INotifyCollectionChanged)runningItems).CollectionChanged += this.onRunningItemsChanged;
+                foreach (var item in runningItems)
+                    this.SubscribeToRunningItem(item);
+            }
+
+            if (agentChat is not null && ReferenceEquals(subAgentsSource, agentChat.SubAgents))
+            {
+                ((IAgentChatSubagentsSnapshotProvider)agentChat).SubscribeAndCaptureSubagents(
+                    this.onSubAgentsChanged,
+                    this.SeedChildren);
+            }
+            else
+            {
+                subAgentsSource.CollectionChanged += this.onSubAgentsChanged;
+                this.SeedChildren((IEnumerable<IRunningSubAgent>)subAgentsSource);
+            }
         }
+        catch (Exception failure)
+        {
+            try { this.Dispose(); }
+            catch (Exception cleanupFailure) { throw new AggregateException(failure, cleanupFailure); }
+            throw;
+        }
+    }
+
+    private void SeedChildren(IEnumerable<IRunningSubAgent> children)
+    {
+        lock (this.resourcesLock)
+            foreach (var child in children)
+                this.subAgentDisplayItems.Add(this.childFactory(child));
     }
 
     public string AgentId => this.agentId;
@@ -160,31 +205,39 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
     private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.OldItems is not null)
+        lock (this.resourcesLock)
         {
-            foreach (AgentChatRunningItem item in e.OldItems)
+            if (this.disposed) return;
+            if (e.OldItems is not null)
             {
-                if (!ContainsReference(e.NewItems, item))
-                    this.UnsubscribeFromRunningItem(item);
+                foreach (AgentChatRunningItem item in e.OldItems)
+                {
+                    if (!ContainsReference(e.NewItems, item))
+                        this.UnsubscribeFromRunningItem(item);
+                }
             }
-        }
 
-        if (e.NewItems is not null)
-        {
-            foreach (AgentChatRunningItem item in e.NewItems)
+            if (e.NewItems is not null)
             {
-                if (!ContainsReference(e.OldItems, item))
-                    this.SubscribeToRunningItem(item);
+                foreach (AgentChatRunningItem item in e.NewItems)
+                {
+                    if (!ContainsReference(e.OldItems, item))
+                        this.SubscribeToRunningItem(item);
+                }
             }
         }
     }
 
     private void OnSubAgentsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.NewItems is not null)
+        lock (this.resourcesLock)
         {
-            foreach (IRunningSubAgent subAgent in e.NewItems)
-                this.subAgentDisplayItems.Add(this.childFactory(subAgent));
+            if (this.disposed) return;
+            if (e.NewItems is not null)
+            {
+                foreach (IRunningSubAgent subAgent in e.NewItems)
+                    this.subAgentDisplayItems.Add(this.childFactory(subAgent));
+            }
         }
     }
 
@@ -195,7 +248,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             item.Items.CollectionChanged -= oldHandler;
         }
 
-        NotifyCollectionChangedEventHandler handler = (_, e) => this.OnRunningItemItemsChanged(item, e);
+        var handler = this.onRunningItemChanged;
         this.runningItemHandlers[item] = handler;
         item.Items.CollectionChanged += handler;
     }
@@ -303,23 +356,54 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
     public void Dispose()
     {
-        ((INotifyCollectionChanged)this.runningItems).CollectionChanged -= this.onRunningItemsChanged;
-        this.subAgentsSource.CollectionChanged -= this.onSubAgentsChanged;
-
-        if (this.agentChat is not null && this.onAgentChatCompletionStateChanged is not null)
+        List<Action> releases;
+        lock (this.resourcesLock)
         {
-            this.agentChat.CompletionStateChanged -= this.onAgentChatCompletionStateChanged;
+            if (this.disposed) return;
+            this.disposed = true;
+            var items = this.runningItemHandlers.Keys.ToArray();
+            releases =
+            [
+                () =>
+                {
+                    if (this.agentChat is not null)
+                        ((IAgentChatRunningItemsSnapshotProvider)this.agentChat).UnsubscribeRunningItems(
+                            this.onRunningItemsChanged,
+                            this.onRunningItemChanged,
+                            items);
+                    else
+                    {
+                        ((INotifyCollectionChanged)this.runningItems).CollectionChanged -= this.onRunningItemsChanged;
+                        foreach (var item in items)
+                            item.Items.CollectionChanged -= this.onRunningItemChanged;
+                    }
+                },
+                () => this.subAgentsSource.CollectionChanged -= this.onSubAgentsChanged,
+                () =>
+                {
+                    if (this.agentChat is not null)
+                        this.agentChat.CompletionStateChanged -= this.onAgentChatCompletionStateChanged;
+                },
+            ];
+            releases.AddRange(this.subAgentDisplayItems.OfType<IDisposable>().Select<IDisposable, Action>(
+                display => display.Dispose));
+            releases.Add(this.subAgentDisplayItems.Clear);
+            this.runningItemHandlers.Clear();
+            this.recentActivity.Clear();
+            this.recentActivityKeys.Clear();
         }
+        ReleaseAll(releases);
+    }
 
-        foreach (var (item, handler) in this.runningItemHandlers)
-            item.Items.CollectionChanged -= handler;
-
-        this.runningItemHandlers.Clear();
-        this.recentActivityKeys.Clear();
-
-        foreach (var display in this.subAgentDisplayItems)
-            if (display is IDisposable d)
-                d.Dispose();
+    internal static void ReleaseAll(IEnumerable<Action> releases)
+    {
+        List<Exception> failures = [];
+        foreach (var release in releases)
+        {
+            try { release(); }
+            catch (Exception failure) { failures.Add(failure); }
+        }
+        if (failures.Count != 0) throw new AggregateException(failures);
     }
 }
 
@@ -327,13 +411,19 @@ internal sealed class RemoteRunningSubAgentDisplay : IRunningSubAgentDisplay, ID
 {
     private readonly IRunningSubAgent subAgent;
     private IReadOnlyList<IRunningSubAgentDisplay> children;
+    private bool disposed;
 
     public RemoteRunningSubAgentDisplay(IRunningSubAgent subAgent)
     {
         this.subAgent = subAgent;
-        this.children = subAgent.SubAgents.Select(child => (IRunningSubAgentDisplay)new RemoteRunningSubAgentDisplay(child))
-            .ToArray();
-        subAgent.CompletionStateChanged += this.OnSubAgentChanged;
+        this.children = CreateChildren(subAgent);
+        try { subAgent.CompletionStateChanged += this.OnSubAgentChanged; }
+        catch (Exception failure)
+        {
+            try { this.Dispose(); }
+            catch (Exception cleanupFailure) { throw new AggregateException(failure, cleanupFailure); }
+            throw;
+        }
     }
 
     public string AgentId => this.subAgent.AgentId;
@@ -349,19 +439,61 @@ internal sealed class RemoteRunningSubAgentDisplay : IRunningSubAgentDisplay, ID
 
     private void OnSubAgentChanged(object? sender, EventArgs e)
     {
-        foreach (var child in this.children)
-            if (child is IDisposable disposable)
-                disposable.Dispose();
-        this.children = this.subAgent.SubAgents
-            .Select(child => (IRunningSubAgentDisplay)new RemoteRunningSubAgentDisplay(child)).ToArray();
+        if (this.disposed) return;
+        var replacement = CreateChildren(this.subAgent);
+        var previous = this.children;
+        this.children = replacement;
+        RunningSubAgentDisplay.ReleaseAll(previous.OfType<IDisposable>().Select<IDisposable, Action>(
+            child => child.Dispose));
         this.CompletionStateChanged?.Invoke(this, e);
+    }
+
+    private static IReadOnlyList<IRunningSubAgentDisplay> CreateChildren(IRunningSubAgent source)
+    {
+        List<IRunningSubAgentDisplay> children = [];
+        try
+        {
+            foreach (var child in CaptureChildren(source))
+                children.Add(new RemoteRunningSubAgentDisplay(child));
+            return children;
+        }
+        catch (Exception failure)
+        {
+            try
+            {
+                RunningSubAgentDisplay.ReleaseAll(children.OfType<IDisposable>().Select<IDisposable, Action>(
+                    child => child.Dispose));
+            }
+            catch (Exception cleanupFailure) { throw new AggregateException(failure, cleanupFailure); }
+            throw;
+        }
+    }
+
+    private static IReadOnlyList<IRunningSubAgent> CaptureChildren(IRunningSubAgent source)
+    {
+        if (source is not IAgentChatSubagentsSnapshotProvider snapshotProvider)
+            return source.SubAgents;
+
+        // A lazy SubAgent can materialize between display selection and recursive seeding.
+        // Its children then belong to an engine, not to this viewer's scheduler.
+        IReadOnlyList<IRunningSubAgent> children = [];
+        NotifyCollectionChangedEventHandler ignoreChanges = static (_, _) => { };
+        try
+        {
+            snapshotProvider.SubscribeAndCaptureSubagents(ignoreChanges, snapshot => children = snapshot);
+            return children;
+        }
+        finally { snapshotProvider.UnsubscribeSubagents(ignoreChanges); }
     }
 
     public void Dispose()
     {
-        this.subAgent.CompletionStateChanged -= this.OnSubAgentChanged;
-        foreach (var child in this.children)
-            if (child is IDisposable disposable)
-                disposable.Dispose();
+        if (this.disposed) return;
+        this.disposed = true;
+        var previous = this.children;
+        this.children = [];
+        RunningSubAgentDisplay.ReleaseAll(
+            new Action[] { () => this.subAgent.CompletionStateChanged -= this.OnSubAgentChanged }
+                .Concat(previous.OfType<IDisposable>().Select<IDisposable, Action>(child => child.Dispose)));
     }
 }
